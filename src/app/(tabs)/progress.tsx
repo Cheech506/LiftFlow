@@ -2,15 +2,39 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { SectionCard } from '@/components/SectionCard';
 import { colors, spacing } from '@/constants/theme';
+import { useActiveWorkout } from '@/context/ActiveWorkoutContext';
+import {
+  formatDurationShort,
+  getCompletedSets,
+  getWorkoutDurationSeconds,
+  isInCurrentWeek,
+} from '@/lib/workoutStats';
+
+const TWELVE_WEEKS_MS = 12 * 7 * 24 * 60 * 60 * 1000;
 
 export default function ProgressScreen() {
+  const { completedWorkouts } = useActiveWorkout();
+  const cutoff = Date.now() - TWELVE_WEEKS_MS;
+  const recentWorkouts = completedWorkouts.filter(
+    (workout) => workout.completedAt >= cutoff,
+  );
+  const workingSets = recentWorkouts.reduce(
+    (total, workout) => total + getCompletedSets(workout).length,
+    0,
+  );
+  const trainingSeconds = recentWorkouts.reduce(
+    (total, workout) => total + getWorkoutDurationSeconds(workout),
+    0,
+  );
+  const currentWeekCount = completedWorkouts.filter(isInCurrentWeek).length;
+
   return (
     <ScrollView contentContainerStyle={styles.content}>
       <SectionCard title="Last 12 weeks">
         <View style={styles.statsGrid}>
-          <ProgressStat value="0" label="Workouts" />
-          <ProgressStat value="0" label="Working sets" />
-          <ProgressStat value="0m" label="Training time" />
+          <ProgressStat value={String(recentWorkouts.length)} label="Workouts" />
+          <ProgressStat value={String(workingSets)} label="Working sets" />
+          <ProgressStat value={formatDurationShort(trainingSeconds)} label="Training time" />
           <ProgressStat value="0" label="New records" />
         </View>
       </SectionCard>
@@ -18,7 +42,7 @@ export default function ProgressScreen() {
       <SectionCard title="Consistency">
         <View style={styles.rowBetween}>
           <View>
-            <Text style={styles.value}>0 workouts</Text>
+            <Text style={styles.value}>{currentWeekCount} workouts</Text>
             <Text style={styles.label}>Current week</Text>
           </View>
           <View style={styles.goalBadge}>
@@ -26,7 +50,11 @@ export default function ProgressScreen() {
           </View>
         </View>
         <Text style={styles.bodyText}>
-          Weekly streaks will begin after your first completed workout.
+          {currentWeekCount >= 3
+            ? 'Weekly goal complete. Nice work.'
+            : `${Math.max(0, 3 - currentWeekCount)} workout${
+                3 - currentWeekCount === 1 ? '' : 's'
+              } remaining this week.`}
         </Text>
       </SectionCard>
 

@@ -3,9 +3,15 @@ import {
   PropsWithChildren,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+
+import { colors, spacing } from '@/constants/theme';
+import { loadLiftFlowState, saveLiftFlowState } from '@/storage/liftflowStorage';
 
 export type WorkoutSet = {
   id: string;
@@ -39,7 +45,18 @@ export type ActiveWorkout = {
   exercises: WorkoutExercise[];
 };
 
+export type CompletedWorkout = {
+  id: string;
+  name: string;
+  startedAt: number;
+  completedAt: number;
+  sourceTemplateId?: string;
+  sourceFolder?: string;
+  exercises: WorkoutExercise[];
+};
+
 type SetValueField = 'weight' | 'reps';
+type PersistenceStatus = 'loading' | 'saving' | 'saved' | 'error';
 
 type FinishWorkoutOptions = {
   updateTemplate?: boolean;
@@ -48,8 +65,11 @@ type FinishWorkoutOptions = {
 type ActiveWorkoutContextValue = {
   workout: ActiveWorkout | null;
   templates: WorkoutTemplate[];
+  completedWorkouts: CompletedWorkout[];
   completedSetCount: number;
   totalSetCount: number;
+  persistenceStatus: PersistenceStatus;
+  lastSavedAt: number | null;
   startWorkout: (name: string, templateId?: string) => void;
   toggleSet: (exerciseId: string, setId: string) => void;
   updateSetValue: (
@@ -225,6 +245,70 @@ const cloneTemplateExercises = (template: WorkoutTemplate): WorkoutExercise[] =>
 export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
   const [workout, setWorkout] = useState<ActiveWorkout | null>(null);
   const [templates, setTemplates] = useState<WorkoutTemplate[]>(initialTemplates);
+  const [completedWorkouts, setCompletedWorkouts] = useState<CompletedWorkout[]>([]);
+  const [isHydrated, setIsHydrated] = useState(false);
+  const [persistenceStatus, setPersistenceStatus] =
+    useState<PersistenceStatus>('loading');
+  const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const hydrate = async () => {
+      try {
+        const savedState = await loadLiftFlowState();
+        if (cancelled) return;
+
+        if (savedState) {
+          setTemplates(savedState.templates);
+          setWorkout(savedState.activeWorkout);
+          setCompletedWorkouts(savedState.completedWorkouts);
+        }
+
+        setPersistenceStatus('saved');
+        setLastSavedAt(Date.now());
+      } catch (error) {
+        console.error('Unable to load LiftFlow local data.', error);
+        if (!cancelled) setPersistenceStatus('error');
+      } finally {
+        if (!cancelled) setIsHydrated(true);
+      }
+    };
+
+    void hydrate();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isHydrated) return;
+
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    setPersistenceStatus('saving');
+
+    saveTimerRef.current = setTimeout(() => {
+      void saveLiftFlowState({
+        templates,
+        activeWorkout: workout,
+        completedWorkouts,
+      })
+        .then(() => {
+          setPersistenceStatus('saved');
+          setLastSavedAt(Date.now());
+        })
+        .catch((error: unknown) => {
+          console.error('Unable to save LiftFlow local data.', error);
+          setPersistenceStatus('error');
+        });
+    }, 150);
+
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+  }, [completedWorkouts, isHydrated, templates, workout]);
 
   const startWorkout = useCallback(
     (name: string, templateId?: string) => {
@@ -350,6 +434,7 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
     setWorkout((current) => {
       if (!current || current.exercises.length > 0) return current;
 
+      const stamp = Date.now();
       return {
         ...current,
         exercises: [
@@ -358,7 +443,7 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
             name: 'Bench Press',
             sets: [
               {
-                id: `bench-${Date.now()}-1`,
+                id: `bench-${stamp}-1`,
                 previousWeight: 185,
                 previousReps: 6,
                 weight: 185,
@@ -366,7 +451,7 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
                 completed: false,
               },
               {
-                id: `bench-${Date.now()}-2`,
+                id: `bench-${stamp}-2`,
                 previousWeight: 185,
                 previousReps: 5,
                 weight: 185,
@@ -374,7 +459,7 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
                 completed: false,
               },
               {
-                id: `bench-${Date.now()}-3`,
+                id: `bench-${stamp}-3`,
                 previousWeight: 175,
                 previousReps: 8,
                 weight: 175,
@@ -390,7 +475,23 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
 
   const finishWorkout = useCallback(
     (options: FinishWorkoutOptions = {}) => {
-      if (options.updateTemplate && workout?.sourceTemplateId) {
+      if (!workout) return;
+
+      const sourceTemplate = workout.sourceTemplateId
+        ? templates.find((template) => template.id === workout.sourceTemplateId)
+        : undefined;
+
+      const completedWorkout: CompletedWorkout = {
+        ...workout,
+        completedAt: Date.now(),
+        sourceFolder: sourceTemplate?.folder,
+        exercises: workout.exercises.map((exercise) => ({
+          ...exercise,
+          sets: exercise.sets.map((set) => ({ ...set })),
+        })),
+      };
+
+      if (options.updateTemplate && workout.sourceTemplateId) {
         setTemplates((currentTemplates) =>
           currentTemplates.map((template) => {
             if (template.id !== workout.sourceTemplateId) return template;
@@ -413,9 +514,10 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
         );
       }
 
+      setCompletedWorkouts((current) => [completedWorkout, ...current]);
       setWorkout(null);
     },
-    [workout],
+    [templates, workout],
   );
 
   const discardWorkout = useCallback(() => setWorkout(null), []);
@@ -432,8 +534,11 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
     () => ({
       workout,
       templates,
+      completedWorkouts,
       completedSetCount,
       totalSetCount,
+      persistenceStatus,
+      lastSavedAt,
       startWorkout,
       toggleSet,
       updateSetValue,
@@ -446,8 +551,11 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
     [
       workout,
       templates,
+      completedWorkouts,
       completedSetCount,
       totalSetCount,
+      persistenceStatus,
+      lastSavedAt,
       startWorkout,
       toggleSet,
       updateSetValue,
@@ -458,6 +566,16 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
       discardWorkout,
     ],
   );
+
+  if (!isHydrated) {
+    return (
+      <View style={styles.loadingScreen}>
+        <ActivityIndicator color={colors.primary} size="large" />
+        <Text style={styles.loadingTitle}>Loading LiftFlow</Text>
+        <Text style={styles.loadingCopy}>Restoring workouts saved on this device…</Text>
+      </View>
+    );
+  }
 
   return (
     <ActiveWorkoutContext.Provider value={value}>
@@ -473,3 +591,25 @@ export function useActiveWorkout() {
   }
   return context;
 }
+
+const styles = StyleSheet.create({
+  loadingScreen: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    padding: spacing.lg,
+    backgroundColor: colors.background,
+  },
+  loadingTitle: {
+    color: colors.text,
+    fontSize: 20,
+    fontWeight: '900',
+    marginTop: spacing.sm,
+  },
+  loadingCopy: {
+    color: colors.textMuted,
+    fontSize: 14,
+    textAlign: 'center',
+  },
+});

@@ -2,6 +2,7 @@ import { ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 
 import { SectionCard } from '@/components/SectionCard';
 import { colors, spacing } from '@/constants/theme';
+import { useActiveWorkout } from '@/context/ActiveWorkoutContext';
 
 const sections = [
   {
@@ -27,10 +28,33 @@ const sections = [
 ];
 
 export default function SettingsScreen() {
+  const {
+    persistenceStatus,
+    lastSavedAt,
+    templates,
+    workout,
+    completedWorkouts,
+  } = useActiveWorkout();
+
   return (
     <ScrollView contentContainerStyle={styles.content}>
       <SectionCard title="Profile">
         <SettingsRow label="LiftFlow Owner" detail="Single-owner instance" />
+      </SectionCard>
+
+      <SectionCard title="Local data">
+        <SettingsRow
+          label={formatPersistenceStatus(persistenceStatus)}
+          detail={lastSavedAt ? `Last saved ${formatSavedTime(lastSavedAt)}` : 'Preparing local storage'}
+        />
+        <SettingsRow
+          label={`${templates.length} workout templates`}
+          detail={workout ? `Active workout: ${workout.name}` : 'No active workout'}
+        />
+        <SettingsRow
+          label={`${completedWorkouts.length} completed workouts`}
+          detail="Stored on this device"
+        />
       </SectionCard>
 
       {sections.map((section) => (
@@ -71,6 +95,21 @@ function SettingsRow({ label, detail }: { label: string; detail?: string }) {
       <Text style={styles.chevron}>›</Text>
     </View>
   );
+}
+
+function formatPersistenceStatus(status: 'loading' | 'saving' | 'saved' | 'error') {
+  if (status === 'saving') return 'Saving local data…';
+  if (status === 'error') return 'Local storage needs attention';
+  if (status === 'loading') return 'Loading local data…';
+  return 'Local data is saved';
+}
+
+function formatSavedTime(timestamp: number) {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+  }).format(new Date(timestamp));
 }
 
 const styles = StyleSheet.create({

@@ -1,6 +1,6 @@
 # LiftFlow
 
-LiftFlow is an open-source, self-hosted workout tracker inspired by Strong. This repository currently contains the first mobile application scaffold: five main tabs, Settings outside the tab bar, and a modal Active Workout experience with a persistent resume bar.
+LiftFlow is an open-source, self-hosted workout tracker inspired by Strong. The mobile foundation currently includes five main tabs, Settings outside the tab bar, a modal Active Workout experience, and persistent local workout data.
 
 ## Current foundation
 
@@ -11,7 +11,11 @@ LiftFlow is an open-source, self-hosted workout tracker inspired by Strong. This
 - Settings gear on every tab
 - Active Workout opens as a full-screen modal
 - Persistent workout-in-progress bar above the tab navigation
-- Basic functional demo workout state
+- Editable weight and repetition values
+- Optional template updates when finishing
+- Persistent active workouts, templates, and completed history
+- SQLite-backed local storage on iPhone and Android
+- Browser local storage during web development
 
 ## Run locally
 
@@ -20,8 +24,8 @@ npm install
 npx expo start
 ```
 
-Then open the project using Expo Go, an Android emulator, or an iOS simulator.
+Then open the project using the web build, an Android emulator/device, or an iOS simulator/development build.
 
-## Current limitation
+## Local-first behavior
 
-Workout state is currently stored only in React memory. SQLite persistence is the next major implementation phase.
+LiftFlow saves workout changes on the device first. The future FastAPI/PostgreSQL server will add synchronization and centralized backups without making the server a requirement during a workout.

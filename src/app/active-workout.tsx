@@ -44,6 +44,7 @@ export default function ActiveWorkoutScreen() {
     addDemoExercise,
     finishWorkout,
     discardWorkout,
+    persistenceStatus,
   } = useActiveWorkout();
   const [now, setNow] = useState(Date.now());
   const [restSeconds, setRestSeconds] = useState(0);
@@ -114,7 +115,13 @@ export default function ActiveWorkoutScreen() {
           <Text style={styles.workoutName}>{workout.name}</Text>
           <Text style={styles.elapsed}>{formatDuration(elapsed)}</Text>
           <Text style={styles.muted}>Add workout notes</Text>
-          <Text style={styles.saveStatus}>✓ Saved in app memory</Text>
+          <Text style={[styles.saveStatus, persistenceStatus === 'error' && styles.saveStatusError]}>
+            {persistenceStatus === 'saving'
+              ? '↻ Saving on this device…'
+              : persistenceStatus === 'error'
+                ? '! Local save issue'
+                : '✓ Saved on this device'}
+          </Text>
           {workout.sourceTemplateId ? (
             <Text style={styles.templateHint}>
               Edit today’s values freely. When you finish, LiftFlow will ask whether to save them back to the template.
@@ -451,6 +458,9 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     marginTop: 5,
+  },
+  saveStatusError: {
+    color: colors.danger,
   },
   templateHint: {
     color: colors.warning,

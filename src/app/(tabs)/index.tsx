@@ -5,13 +5,26 @@ import { PrimaryButton } from '@/components/PrimaryButton';
 import { SectionCard } from '@/components/SectionCard';
 import { colors, spacing } from '@/constants/theme';
 import { useActiveWorkout } from '@/context/ActiveWorkoutContext';
+import {
+  formatDurationShort,
+  getCompletedSets,
+  getWorkoutDurationSeconds,
+  isInCurrentWeek,
+} from '@/lib/workoutStats';
 
 export default function HomeScreen() {
   const router = useRouter();
-  const { workout, startWorkout, completedSetCount, totalSetCount } = useActiveWorkout();
+  const {
+    workout,
+    startWorkout,
+    completedSetCount,
+    totalSetCount,
+    completedWorkouts,
+    persistenceStatus,
+  } = useActiveWorkout();
 
   const startEmptyWorkout = () => {
-    startWorkout('Afternoon Workout');
+    startWorkout(getEmptyWorkoutName());
     router.push('/active-workout');
   };
 
@@ -20,12 +33,34 @@ export default function HomeScreen() {
     router.push('/active-workout');
   };
 
+  const currentWeekWorkouts = completedWorkouts.filter(isInCurrentWeek);
+  const currentWeekSeconds = currentWeekWorkouts.reduce(
+    (total, item) => total + getWorkoutDurationSeconds(item),
+    0,
+  );
+  const currentWeekSets = currentWeekWorkouts.reduce(
+    (total, item) => total + getCompletedSets(item).length,
+    0,
+  );
+
   return (
     <ScrollView contentContainerStyle={styles.content}>
       <View>
-        <Text style={styles.eyebrow}>MONDAY, AUGUST 3</Text>
+        <Text style={styles.eyebrow}>{formatToday()}</Text>
         <Text style={styles.hero}>Ready to train?</Text>
         <Text style={styles.subhead}>Your workouts stay yours.</Text>
+        <Text
+          style={[
+            styles.storageStatus,
+            persistenceStatus === 'error' && styles.storageStatusError,
+          ]}
+        >
+          {persistenceStatus === 'saving'
+            ? '↻ Saving locally…'
+            : persistenceStatus === 'error'
+              ? '! Local save issue'
+              : '✓ Local data ready'}
+        </Text>
       </View>
 
       {workout ? (
@@ -86,9 +121,9 @@ export default function HomeScreen() {
 
       <SectionCard title="This week">
         <View style={styles.statsRow}>
-          <Stat value="0" label="Workouts" />
-          <Stat value="0m" label="Training" />
-          <Stat value="0" label="Sets" />
+          <Stat value={String(currentWeekWorkouts.length)} label="Workouts" />
+          <Stat value={formatDurationShort(currentWeekSeconds)} label="Training" />
+          <Stat value={String(currentWeekSets)} label="Sets" />
         </View>
         <View style={styles.weekRow}>
           {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((day, index) => (
@@ -119,6 +154,23 @@ function Stat({ value, label }: { value: string; label: string }) {
   );
 }
 
+function getEmptyWorkoutName() {
+  const hour = new Date().getHours();
+  if (hour < 12) return 'Morning Workout';
+  if (hour < 17) return 'Afternoon Workout';
+  return 'Evening Workout';
+}
+
+function formatToday() {
+  return new Intl.DateTimeFormat(undefined, {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+  })
+    .format(new Date())
+    .toUpperCase();
+}
+
 const styles = StyleSheet.create({
   content: {
     padding: spacing.md,
@@ -141,6 +193,15 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     fontSize: 16,
     marginTop: 4,
+  },
+  storageStatus: {
+    color: colors.primary,
+    fontSize: 12,
+    fontWeight: '800',
+    marginTop: spacing.sm,
+  },
+  storageStatusError: {
+    color: colors.danger,
   },
   rowBetween: {
     flexDirection: 'row',
