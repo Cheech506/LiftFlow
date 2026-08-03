@@ -40,6 +40,7 @@ export default function ActiveWorkoutScreen() {
     completedSetCount,
     totalSetCount,
     toggleSet,
+    toggleSetType,
     updateSetValue,
     copyPreviousSet,
     addSet,
@@ -178,6 +179,7 @@ export default function ActiveWorkoutScreen() {
                 toggleSet(exercise.id, setId);
                 if (set && !set.completed) setRestSeconds(120);
               }}
+              onToggleSetType={(setId) => toggleSetType(exercise.id, setId)}
               onUpdateValue={(setId, field, value) =>
                 updateSetValue(exercise.id, setId, field, value)
               }
@@ -236,6 +238,7 @@ export default function ActiveWorkoutScreen() {
 function ExerciseCard({
   exercise,
   onToggle,
+  onToggleSetType,
   onUpdateValue,
   onCopyPrevious,
   onAddSet,
@@ -243,6 +246,7 @@ function ExerciseCard({
 }: {
   exercise: WorkoutExercise;
   onToggle: (setId: string) => void;
+  onToggleSetType: (setId: string) => void;
   onUpdateValue: (
     setId: string,
     field: 'weight' | 'reps',
@@ -258,7 +262,7 @@ function ExerciseCard({
         <View style={styles.exerciseHeaderCopy}>
           <Text style={styles.exerciseName}>{exercise.name}</Text>
           <Text style={styles.exerciseNote}>
-            Tap Previous to copy it, or type today’s weight and reps.
+            Tap Previous to copy it, or type today’s weight and reps. Tap the set label to mark a warm-up.
           </Text>
         </View>
         <Pressable
@@ -280,13 +284,37 @@ function ExerciseCard({
         <Text style={[styles.columnLabel, styles.doneColumn]}>✓</Text>
       </View>
 
-      {exercise.sets.map((set, index) => (
+      {exercise.sets.map((set, index) => {
+        const setLabel = getSetLabel(exercise.sets, index);
+        const isWarmup = (set.setType ?? 'normal') === 'warmup';
+
+        return (
         <View key={set.id}>
-          <View style={[styles.setRow, set.completed && styles.completedRow]}>
-            <Text style={[styles.setNumber, styles.setColumn]}>{index + 1}</Text>
+          <View
+            style={[
+              styles.setRow,
+              isWarmup && styles.warmupSetRow,
+              set.completed && styles.completedRow,
+            ]}
+          >
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={`Copy previous values for set ${index + 1}`}
+              accessibilityLabel={`${isWarmup ? 'Warm-up' : `Working set ${setLabel}`}. Tap to switch set type.`}
+              onPress={() => onToggleSetType(set.id)}
+              style={({ pressed }) => [
+                styles.setColumn,
+                styles.activeSetTypeButton,
+                isWarmup && styles.activeWarmupSetTypeButton,
+                pressed && styles.pressed,
+              ]}
+            >
+              <Text style={[styles.setNumber, isWarmup && styles.warmupSetNumber]}>
+                {setLabel}
+              </Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Copy previous values for ${isWarmup ? 'warm-up set' : `set ${setLabel}`}`}
               onPress={() => onCopyPrevious(set.id)}
               style={({ pressed }) => [
                 styles.previousColumn,
@@ -333,7 +361,8 @@ function ExerciseCard({
             </View>
           ) : null}
         </View>
-      ))}
+        );
+      })}
 
       <Pressable
         accessibilityRole="button"
@@ -343,6 +372,17 @@ function ExerciseCard({
         <Text style={styles.addSetLabel}>+ Add Set</Text>
       </Pressable>
     </View>
+  );
+}
+
+function getSetLabel(sets: WorkoutExercise['sets'], index: number) {
+  const set = sets[index];
+  if ((set.setType ?? 'normal') === 'warmup') return 'W';
+
+  return String(
+    sets
+      .slice(0, index + 1)
+      .filter((candidate) => (candidate.setType ?? 'normal') === 'normal').length,
   );
 }
 
@@ -739,6 +779,23 @@ const styles = StyleSheet.create({
     color: colors.text,
     textAlign: 'center',
     fontWeight: '800',
+  },
+  activeSetTypeButton: {
+    minHeight: 38,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radius.sm,
+  },
+  activeWarmupSetTypeButton: {
+    backgroundColor: colors.surfaceElevated,
+    borderColor: colors.primary,
+    borderWidth: 1,
+  },
+  warmupSetRow: {
+    backgroundColor: 'rgba(98, 216, 139, 0.05)',
+  },
+  warmupSetNumber: {
+    color: colors.primary,
   },
   previousButton: {
     minHeight: 36,

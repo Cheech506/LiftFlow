@@ -275,7 +275,7 @@ function TemplatePreviewModal({
                     <Text style={styles.exerciseName}>{exercise.name}</Text>
                     {exercise.sets.map((set, index) => (
                       <Text key={set.id} style={styles.previewSetText}>
-                        Set {index + 1}: {formatTemplateSet(set)}
+                        {getSetDisplayName(exercise.sets, index)}: {formatTemplateSet(set)}
                       </Text>
                     ))}
                   </View>
@@ -637,7 +637,10 @@ function TemplateEditorModal({
     setDraftExercises(
       nextTemplate?.exercises.map((exercise) => ({
         ...exercise,
-        sets: exercise.sets.map((set) => ({ ...set })),
+        sets: exercise.sets.map((set) => ({
+          ...set,
+          setType: set.setType ?? 'normal',
+        })),
       })) ?? [],
     );
     setPickerOpen(false);
@@ -690,6 +693,26 @@ function TemplateEditorModal({
     );
   };
 
+  const toggleSetType = (exerciseId: string, setId: string) => {
+    setDraftExercises((current) =>
+      current.map((exercise) =>
+        exercise.id !== exerciseId
+          ? exercise
+          : {
+              ...exercise,
+              sets: exercise.sets.map((set) =>
+                set.id === setId
+                  ? {
+                      ...set,
+                      setType: (set.setType ?? 'normal') === 'warmup' ? 'normal' : 'warmup',
+                    }
+                  : set,
+              ),
+            },
+      ),
+    );
+  };
+
   const addSetToExercise = (exerciseId: string) => {
     setDraftExercises((current) =>
       current.map((exercise) => {
@@ -705,6 +728,7 @@ function TemplateEditorModal({
               reps: last?.reps,
               rpe: last?.rpe,
               rir: last?.rir,
+              setType: 'normal',
               completed: false,
             },
           ],
@@ -723,6 +747,23 @@ function TemplateEditorModal({
     );
   };
 
+  const moveExercise = (exerciseId: string, direction: 'up' | 'down') => {
+    setDraftExercises((current) => {
+      const currentIndex = current.findIndex((exercise) => exercise.id === exerciseId);
+      if (currentIndex < 0) return current;
+
+      const nextIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+      if (nextIndex < 0 || nextIndex >= current.length) return current;
+
+      const reordered = [...current];
+      [reordered[currentIndex], reordered[nextIndex]] = [
+        reordered[nextIndex],
+        reordered[currentIndex],
+      ];
+      return reordered;
+    });
+  };
+
   const removeExerciseFromTemplate = (exerciseId: string) => {
     setDraftExercises((current) => current.filter((exercise) => exercise.id !== exerciseId));
   };
@@ -739,6 +780,7 @@ function TemplateEditorModal({
           id: `${definition.id}-${stamp}-${index + 1}`,
           weight: definition.defaultWeight,
           reps: definition.defaultReps ?? 8,
+          setType: 'normal',
           completed: false,
         })),
       },
@@ -791,7 +833,7 @@ function TemplateEditorModal({
           >
             <Text style={styles.modalTitle}>Edit Template</Text>
             <Text style={styles.modalDetail}>
-              Set the exact weight, reps, and RPE or RIR target for every set.
+              Set the exact weight, reps, and RPE or RIR target for every set. Tap the set label to switch between a working set and a warm-up set.
             </Text>
 
             <FormField
@@ -807,7 +849,7 @@ function TemplateEditorModal({
               placeholder="Upper / Lower"
             />
 
-            {draftExercises.map((exercise) => (
+            {draftExercises.map((exercise, exerciseIndex) => (
               <View key={exercise.id} style={styles.templateExerciseCard}>
                 <View style={styles.templateExerciseHeader}>
                   <View style={styles.workoutCopy}>
@@ -816,13 +858,44 @@ function TemplateEditorModal({
                       {exercise.sets.length} planned set{exercise.sets.length === 1 ? '' : 's'}
                     </Text>
                   </View>
-                  <Pressable
-                    accessibilityRole="button"
-                    onPress={() => removeExerciseFromTemplate(exercise.id)}
-                    style={({ pressed }) => [styles.removeButton, pressed && styles.pressed]}
-                  >
-                    <Text style={styles.removeButtonLabel}>Remove</Text>
-                  </Pressable>
+                  <View style={styles.templateExerciseActions}>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`Move ${exercise.name} up`}
+                      accessibilityState={{ disabled: exerciseIndex === 0 }}
+                      disabled={exerciseIndex === 0}
+                      onPress={() => moveExercise(exercise.id, 'up')}
+                      style={({ pressed }) => [
+                        styles.moveExerciseButton,
+                        exerciseIndex === 0 && styles.disabledControl,
+                        pressed && styles.pressed,
+                      ]}
+                    >
+                      <Text style={styles.moveExerciseButtonLabel}>↑</Text>
+                    </Pressable>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`Move ${exercise.name} down`}
+                      accessibilityState={{ disabled: exerciseIndex === draftExercises.length - 1 }}
+                      disabled={exerciseIndex === draftExercises.length - 1}
+                      onPress={() => moveExercise(exercise.id, 'down')}
+                      style={({ pressed }) => [
+                        styles.moveExerciseButton,
+                        exerciseIndex === draftExercises.length - 1 && styles.disabledControl,
+                        pressed && styles.pressed,
+                      ]}
+                    >
+                      <Text style={styles.moveExerciseButtonLabel}>↓</Text>
+                    </Pressable>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`Remove ${exercise.name} from template`}
+                      onPress={() => removeExerciseFromTemplate(exercise.id)}
+                      style={({ pressed }) => [styles.removeButton, pressed && styles.pressed]}
+                    >
+                      <Text style={styles.removeButtonLabel}>Remove</Text>
+                    </Pressable>
+                  </View>
                 </View>
 
                 <View style={styles.templateSetHeader}>
@@ -835,9 +908,26 @@ function TemplateEditorModal({
 
                 {exercise.sets.map((set, index) => (
                   <View key={set.id} style={styles.templateSetRow}>
-                    <Text style={[styles.templateSetNumber, styles.templateSetNumberColumn]}>
-                      {index + 1}
-                    </Text>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`${getSetDisplayName(exercise.sets, index)}. Tap to switch working or warm-up set.`}
+                      onPress={() => toggleSetType(exercise.id, set.id)}
+                      style={({ pressed }) => [
+                        styles.templateSetNumberColumn,
+                        styles.setTypeButton,
+                        (set.setType ?? 'normal') === 'warmup' && styles.warmupSetTypeButton,
+                        pressed && styles.pressed,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.templateSetNumber,
+                          (set.setType ?? 'normal') === 'warmup' && styles.warmupSetNumber,
+                        ]}
+                      >
+                        {getSetLabel(exercise.sets, index)}
+                      </Text>
+                    </Pressable>
                     <CompactNumberInput
                       value={set.weight}
                       decimal
@@ -986,6 +1076,22 @@ function CompactNumberInput({
       />
     </View>
   );
+}
+
+function getSetLabel(sets: WorkoutSet[], index: number) {
+  const set = sets[index];
+  if ((set.setType ?? 'normal') === 'warmup') return 'W';
+
+  return String(
+    sets
+      .slice(0, index + 1)
+      .filter((candidate) => (candidate.setType ?? 'normal') === 'normal').length,
+  );
+}
+
+function getSetDisplayName(sets: WorkoutSet[], index: number) {
+  const label = getSetLabel(sets, index);
+  return label === 'W' ? 'Warm-up' : `Set ${label}`;
 }
 
 function formatTemplateSet(set: WorkoutSet) {
@@ -1316,6 +1422,26 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.sm,
   },
+  templateExerciseActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  moveExerciseButton: {
+    width: 34,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radius.sm,
+    borderColor: colors.border,
+    borderWidth: 1,
+    backgroundColor: colors.surface,
+  },
+  moveExerciseButtonLabel: {
+    color: colors.primary,
+    fontSize: 18,
+    fontWeight: '900',
+  },
   removeButton: {
     minHeight: 36,
     paddingHorizontal: spacing.sm,
@@ -1347,7 +1473,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   templateSetNumberColumn: {
-    width: 28,
+    width: 36,
   },
   templateInputColumn: {
     width: 58,
@@ -1371,6 +1497,22 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '800',
     textAlign: 'center',
+  },
+  setTypeButton: {
+    minHeight: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radius.sm,
+    borderColor: colors.border,
+    borderWidth: 1,
+    backgroundColor: colors.background,
+  },
+  warmupSetTypeButton: {
+    borderColor: colors.primary,
+    backgroundColor: colors.surfaceElevated,
+  },
+  warmupSetNumber: {
+    color: colors.primary,
   },
   compactInput: {
     width: '100%',

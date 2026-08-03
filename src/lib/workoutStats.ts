@@ -12,6 +12,7 @@ export function getWorkoutDurationSeconds(workout: CompletedWorkout): number {
 
 export function getWorkoutVolume(workout: CompletedWorkout): number {
   return getCompletedSets(workout).reduce((total, set) => {
+    if ((set.setType ?? 'normal') === 'warmup') return total;
     if (set.weight === undefined || set.reps === undefined) return total;
     return total + set.weight * set.reps;
   }, 0);

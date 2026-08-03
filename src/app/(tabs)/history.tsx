@@ -243,15 +243,27 @@ function WorkoutDetailModal({
                 {workout.exercises.map((exercise) => (
                   <View key={`${workout.id}-${exercise.id}`} style={styles.detailExercise}>
                     <Text style={styles.exerciseName}>{exercise.name}</Text>
-                    {exercise.sets.map((set, index) => (
-                      <View key={set.id} style={styles.setDetailRow}>
-                        <Text style={styles.setDetailLabel}>Set {index + 1}</Text>
-                        <Text style={styles.setDetailValue}>
-                          {set.weight ?? '—'} lb × {set.reps ?? '—'}
-                          {set.completed ? '  ✓' : ''}
-                        </Text>
-                      </View>
-                    ))}
+                    {exercise.sets.map((set, index) => {
+                      const setLabel = getSetLabel(exercise.sets, index);
+                      const isWarmup = (set.setType ?? 'normal') === 'warmup';
+
+                      return (
+                        <View key={set.id} style={styles.setDetailRow}>
+                          <Text
+                            style={[
+                              styles.setDetailLabel,
+                              isWarmup && styles.warmupSetDetailLabel,
+                            ]}
+                          >
+                            {isWarmup ? 'Warm-up' : `Set ${setLabel}`}
+                          </Text>
+                          <Text style={styles.setDetailValue}>
+                            {set.weight ?? '—'} lb × {set.reps ?? '—'}
+                            {set.completed ? '  ✓' : ''}
+                          </Text>
+                        </View>
+                      );
+                    })}
                   </View>
                 ))}
               </ScrollView>
@@ -262,6 +274,17 @@ function WorkoutDetailModal({
         </View>
       </View>
     </Modal>
+  );
+}
+
+function getSetLabel(sets: CompletedWorkout['exercises'][number]['sets'], index: number) {
+  const set = sets[index];
+  if ((set.setType ?? 'normal') === 'warmup') return 'W';
+
+  return String(
+    sets
+      .slice(0, index + 1)
+      .filter((candidate) => (candidate.setType ?? 'normal') === 'normal').length,
   );
 }
 
@@ -498,6 +521,9 @@ const styles = StyleSheet.create({
   setDetailLabel: {
     color: colors.textMuted,
     fontSize: 13,
+  },
+  warmupSetDetailLabel: {
+    color: colors.primary,
   },
   setDetailValue: {
     color: colors.text,

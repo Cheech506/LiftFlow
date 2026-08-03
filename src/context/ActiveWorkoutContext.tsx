@@ -14,6 +14,8 @@ import { exerciseLibrary, ExerciseDefinition, ExerciseType } from '@/constants/e
 import { colors, spacing } from '@/constants/theme';
 import { loadLiftFlowState, saveLiftFlowState } from '@/storage/liftflowStorage';
 
+export type WorkoutSetType = 'normal' | 'warmup';
+
 export type WorkoutSet = {
   id: string;
   previousWeight?: number;
@@ -22,6 +24,7 @@ export type WorkoutSet = {
   reps?: number;
   rpe?: number;
   rir?: number;
+  setType?: WorkoutSetType;
   completed: boolean;
 };
 
@@ -102,6 +105,7 @@ type ActiveWorkoutContextValue = {
   updateTemplate: (input: UpdateTemplateInput) => WorkoutTemplate | null;
   startWorkout: (name: string, templateId?: string) => void;
   toggleSet: (exerciseId: string, setId: string) => void;
+  toggleSetType: (exerciseId: string, setId: string) => void;
   updateSetValue: (
     exerciseId: string,
     setId: string,
@@ -123,6 +127,7 @@ const createTemplateSet = (id: string, weight?: number, reps?: number): WorkoutS
   id,
   weight,
   reps,
+  setType: 'normal',
   completed: false,
 });
 
@@ -270,6 +275,7 @@ const cloneTemplateExercises = (template: WorkoutTemplate): WorkoutExercise[] =>
       reps: set.reps,
       rpe: set.rpe,
       rir: set.rir,
+      setType: set.setType ?? 'normal',
       completed: false,
     })),
   }));
@@ -391,6 +397,7 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
           id: `${templateId}-${definition.id}-${index + 1}`,
           weight: definition.defaultWeight,
           reps: definition.defaultReps ?? 8,
+          setType: 'normal',
           completed: false,
         })),
       }));
@@ -423,6 +430,7 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
         completed: false,
         rpe: set.rpe,
         rir: set.rir,
+        setType: set.setType ?? 'normal',
       })),
     }));
 
@@ -471,6 +479,31 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
                 ...exercise,
                 sets: exercise.sets.map((set) =>
                   set.id === setId ? { ...set, completed: !set.completed } : set,
+                ),
+              },
+        ),
+      };
+    });
+  }, []);
+
+  const toggleSetType = useCallback((exerciseId: string, setId: string) => {
+    setWorkout((current) => {
+      if (!current) return current;
+
+      return {
+        ...current,
+        exercises: current.exercises.map((exercise) =>
+          exercise.id !== exerciseId
+            ? exercise
+            : {
+                ...exercise,
+                sets: exercise.sets.map((set) =>
+                  set.id === setId
+                    ? {
+                        ...set,
+                        setType: (set.setType ?? 'normal') === 'warmup' ? 'normal' : 'warmup',
+                      }
+                    : set,
                 ),
               },
         ),
@@ -552,6 +585,7 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
                 previousReps: lastSet?.reps,
                 weight: lastSet?.weight,
                 reps: undefined,
+                setType: 'normal',
                 completed: false,
               },
             ],
@@ -587,6 +621,7 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
               previousReps: defaultReps,
               weight: definition.defaultWeight,
               reps: defaultReps,
+              setType: 'normal',
               completed: false,
             })),
           },
@@ -649,6 +684,7 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
                   reps: set.reps,
                   rpe: set.rpe,
                   rir: set.rir,
+                  setType: set.setType ?? 'normal',
                   completed: false,
                 })),
               })),
@@ -688,6 +724,7 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
       updateTemplate,
       startWorkout,
       toggleSet,
+      toggleSetType,
       updateSetValue,
       copyPreviousSet,
       addSet,
@@ -711,6 +748,7 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
       updateTemplate,
       startWorkout,
       toggleSet,
+      toggleSetType,
       updateSetValue,
       copyPreviousSet,
       addSet,
