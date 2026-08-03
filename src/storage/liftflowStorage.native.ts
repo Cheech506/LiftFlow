@@ -1,5 +1,6 @@
 import 'expo-sqlite/localStorage/install';
 
+import { exerciseLibrary, type ExerciseDefinition } from '@/constants/exercises';
 import type {
   ActiveWorkout,
   CompletedWorkout,
@@ -7,13 +8,18 @@ import type {
 } from '@/context/ActiveWorkoutContext';
 
 const STORAGE_KEY = 'liftflow.local-state';
-const STORAGE_VERSION = 1;
+const STORAGE_VERSION = 2;
 
 export type PersistedLiftFlowState = {
   version: typeof STORAGE_VERSION;
+  exercises: ExerciseDefinition[];
   templates: WorkoutTemplate[];
   activeWorkout: ActiveWorkout | null;
   completedWorkouts: CompletedWorkout[];
+};
+
+type StoredLiftFlowState = Partial<PersistedLiftFlowState> & {
+  version?: number;
 };
 
 function getStorage() {
@@ -28,10 +34,10 @@ export async function loadLiftFlowState(): Promise<PersistedLiftFlowState | null
   const storedValue = getStorage().getItem(STORAGE_KEY);
   if (!storedValue) return null;
 
-  const parsed = JSON.parse(storedValue) as Partial<PersistedLiftFlowState>;
+  const parsed = JSON.parse(storedValue) as StoredLiftFlowState;
 
   if (
-    parsed.version !== STORAGE_VERSION ||
+    ![1, STORAGE_VERSION].includes(parsed.version ?? 0) ||
     !Array.isArray(parsed.templates) ||
     !Array.isArray(parsed.completedWorkouts)
   ) {
@@ -40,6 +46,7 @@ export async function loadLiftFlowState(): Promise<PersistedLiftFlowState | null
 
   return {
     version: STORAGE_VERSION,
+    exercises: Array.isArray(parsed.exercises) ? parsed.exercises : exerciseLibrary,
     templates: parsed.templates,
     activeWorkout: parsed.activeWorkout ?? null,
     completedWorkouts: parsed.completedWorkouts,

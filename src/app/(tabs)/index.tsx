@@ -11,6 +11,7 @@ import {
   getWorkoutDurationSeconds,
   isInCurrentWeek,
 } from '@/lib/workoutStats';
+import { showPrototypeNotice } from '@/lib/prototypeNotice';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -23,13 +24,17 @@ export default function HomeScreen() {
     persistenceStatus,
   } = useActiveWorkout();
 
-  const startEmptyWorkout = () => {
-    startWorkout(getEmptyWorkoutName());
-    router.push('/active-workout');
-  };
+  const beginWorkout = (name: string, templateId?: string) => {
+    if (workout) {
+      showPrototypeNotice(
+        'Workout already in progress',
+        `${workout.name} is still active. LiftFlow will resume it instead of overwriting it.`,
+      );
+      router.push('/active-workout');
+      return;
+    }
 
-  const startUpperA = () => {
-    startWorkout('Upper A', 'upper-a');
+    startWorkout(name, templateId);
     router.push('/active-workout');
   };
 
@@ -82,7 +87,7 @@ export default function HomeScreen() {
         <View style={styles.buttonRow}>
           <PrimaryButton
             label="Start Empty"
-            onPress={startEmptyWorkout}
+            onPress={() => beginWorkout(getEmptyWorkoutName())}
             style={styles.flexButton}
           />
           <PrimaryButton
@@ -98,22 +103,23 @@ export default function HomeScreen() {
         <View style={styles.templateCard}>
           <View>
             <Text style={styles.cardHeading}>Upper A</Text>
-            <Text style={styles.muted}>Upper / Lower · 6 exercises</Text>
+            <Text style={styles.muted}>Upper / Lower · 2 exercises</Text>
           </View>
-          <PrimaryButton label="Start" onPress={startUpperA} style={styles.smallButton} />
+          <PrimaryButton
+            label="Start"
+            onPress={() => beginWorkout('Upper A', 'upper-a')}
+            style={styles.smallButton}
+          />
         </View>
         <View style={styles.divider} />
         <View style={styles.templateCard}>
           <View>
             <Text style={styles.cardHeading}>Lower A</Text>
-            <Text style={styles.muted}>Upper / Lower · 5 exercises</Text>
+            <Text style={styles.muted}>Upper / Lower · 1 exercise</Text>
           </View>
           <PrimaryButton
             label="Start"
-            onPress={() => {
-              startWorkout('Lower A', 'lower-a');
-              router.push('/active-workout');
-            }}
+            onPress={() => beginWorkout('Lower A', 'lower-a')}
             style={styles.smallButton}
           />
         </View>

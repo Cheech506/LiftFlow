@@ -1,8 +1,9 @@
-import { ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 
 import { SectionCard } from '@/components/SectionCard';
 import { colors, spacing } from '@/constants/theme';
 import { useActiveWorkout } from '@/context/ActiveWorkoutContext';
+import { showPrototypeNotice } from '@/lib/prototypeNotice';
 
 const sections = [
   {
@@ -36,10 +37,26 @@ export default function SettingsScreen() {
     completedWorkouts,
   } = useActiveWorkout();
 
+  const openPlannedSetting = (label: string) => {
+    showPrototypeNotice(
+      label,
+      'This settings page is planned but is not implemented in the current prototype. The row is now wired so it will never fail silently.',
+    );
+  };
+
   return (
     <ScrollView contentContainerStyle={styles.content}>
       <SectionCard title="Profile">
-        <SettingsRow label="LiftFlow Owner" detail="Single-owner instance" />
+        <SettingsRow
+          label="LiftFlow Owner"
+          detail="Single-owner instance"
+          onPress={() =>
+            showPrototypeNotice(
+              'LiftFlow Owner',
+              'The first release uses one local owner. Account editing will arrive with the self-hosted backend.',
+            )
+          }
+        />
       </SectionCard>
 
       <SectionCard title="Local data">
@@ -60,7 +77,7 @@ export default function SettingsScreen() {
       {sections.map((section) => (
         <SectionCard key={section.title} title={section.title}>
           {section.rows.map((row) => (
-            <SettingsRow key={row} label={row} />
+            <SettingsRow key={row} label={row} onPress={() => openPlannedSetting(row)} />
           ))}
         </SectionCard>
       ))}
@@ -85,15 +102,38 @@ export default function SettingsScreen() {
   );
 }
 
-function SettingsRow({ label, detail }: { label: string; detail?: string }) {
-  return (
-    <View style={styles.row}>
+function SettingsRow({
+  label,
+  detail,
+  onPress,
+}: {
+  label: string;
+  detail?: string;
+  onPress?: () => void;
+}) {
+  const content = (
+    <>
       <View style={styles.copy}>
         <Text style={styles.rowLabel}>{label}</Text>
         {detail ? <Text style={styles.rowDetail}>{detail}</Text> : null}
       </View>
-      <Text style={styles.chevron}>›</Text>
-    </View>
+      {onPress ? <Text style={styles.chevron}>›</Text> : null}
+    </>
+  );
+
+  if (!onPress) {
+    return <View style={styles.row}>{content}</View>;
+  }
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`Open ${label}`}
+      onPress={onPress}
+      style={({ pressed }) => [styles.row, pressed && styles.pressed]}
+    >
+      {content}
+    </Pressable>
   );
 }
 
@@ -131,6 +171,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
+  },
+  pressed: {
+    opacity: 0.65,
   },
   copy: {
     flex: 1,
