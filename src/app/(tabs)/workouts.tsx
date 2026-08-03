@@ -19,7 +19,10 @@ import { colors, radius, spacing } from '@/constants/theme';
 import {
   CreateExerciseInput,
   CreateTemplateInput,
+  UpdateTemplateInput,
   useActiveWorkout,
+  WorkoutExercise,
+  WorkoutSet,
   WorkoutTemplate,
 } from '@/context/ActiveWorkoutContext';
 import { showPrototypeNotice } from '@/lib/prototypeNotice';
@@ -31,11 +34,13 @@ export default function WorkoutsScreen() {
     templates,
     createExercise,
     createTemplate,
+    updateTemplate,
     startWorkout,
     workout,
   } = useActiveWorkout();
   const [selectedTemplate, setSelectedTemplate] = useState<WorkoutTemplate | null>(null);
   const [createVisible, setCreateVisible] = useState(false);
+  const [editingTemplate, setEditingTemplate] = useState<WorkoutTemplate | null>(null);
 
   const begin = (template: WorkoutTemplate) => {
     if (workout) {
@@ -100,7 +105,38 @@ export default function WorkoutsScreen() {
 
     const template = createTemplate(input);
     setCreateVisible(false);
-    setSelectedTemplate(template);
+    setSelectedTemplate(null);
+    setEditingTemplate(template);
+    return true;
+  };
+
+  const saveUpdatedTemplate = (input: UpdateTemplateInput) => {
+    const duplicate = templates.some(
+      (template) =>
+        template.id !== input.id &&
+        template.name.trim().toLowerCase() === input.name.trim().toLowerCase() &&
+        template.folder.trim().toLowerCase() === input.folder.trim().toLowerCase(),
+    );
+
+    if (duplicate) {
+      showPrototypeNotice(
+        'Template already exists',
+        'A template with that name already exists in this folder.',
+      );
+      return false;
+    }
+
+    const updated = updateTemplate(input);
+    if (!updated) {
+      showPrototypeNotice(
+        'Template could not be saved',
+        'Keep at least one exercise and give the template a name.',
+      );
+      return false;
+    }
+
+    setEditingTemplate(null);
+    setSelectedTemplate(updated);
     return true;
   };
 
@@ -161,6 +197,11 @@ export default function WorkoutsScreen() {
         template={selectedTemplate}
         onClose={() => setSelectedTemplate(null)}
         onStart={() => selectedTemplate && begin(selectedTemplate)}
+        onEdit={() => {
+          if (!selectedTemplate) return;
+          setEditingTemplate(selectedTemplate);
+          setSelectedTemplate(null);
+        }}
       />
 
       <CreateTemplateModal
@@ -169,6 +210,13 @@ export default function WorkoutsScreen() {
         onClose={() => setCreateVisible(false)}
         onCreateExercise={saveExercise}
         onSave={saveTemplate}
+      />
+
+      <TemplateEditorModal
+        exercises={exercises}
+        template={editingTemplate}
+        onClose={() => setEditingTemplate(null)}
+        onSave={saveUpdatedTemplate}
       />
     </>
   );
@@ -204,10 +252,12 @@ function TemplatePreviewModal({
   template,
   onClose,
   onStart,
+  onEdit,
 }: {
   template: WorkoutTemplate | null;
   onClose: () => void;
   onStart: () => void;
+  onEdit: () => void;
 }) {
   return (
     <Modal transparent visible={Boolean(template)} animationType="fade" onRequestClose={onClose}>
@@ -223,13 +273,16 @@ function TemplatePreviewModal({
                 {template.exercises.map((exercise) => (
                   <View key={exercise.id} style={styles.previewExercise}>
                     <Text style={styles.exerciseName}>{exercise.name}</Text>
-                    <Text style={styles.workoutDetail}>
-                      {exercise.sets.length} planned set{exercise.sets.length === 1 ? '' : 's'}
-                    </Text>
+                    {exercise.sets.map((set, index) => (
+                      <Text key={set.id} style={styles.previewSetText}>
+                        Set {index + 1}: {formatTemplateSet(set)}
+                      </Text>
+                    ))}
                   </View>
                 ))}
               </ScrollView>
 
+              <PrimaryButton label="Edit Template" onPress={onEdit} variant="secondary" />
               <PrimaryButton label="Start Workout" onPress={onStart} />
               <PrimaryButton label="Close" onPress={onClose} variant="secondary" />
             </>
@@ -561,6 +614,388 @@ function CreateTemplateModal({
   );
 }
 
+function TemplateEditorModal({
+  exercises,
+  template,
+  onClose,
+  onSave,
+}: {
+  exercises: ExerciseDefinition[];
+  template: WorkoutTemplate | null;
+  onClose: () => void;
+  onSave: (input: UpdateTemplateInput) => boolean;
+}) {
+  const [name, setName] = useState('');
+  const [folder, setFolder] = useState('My Workouts');
+  const [draftExercises, setDraftExercises] = useState<WorkoutExercise[]>([]);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [query, setQuery] = useState('');
+
+  const resetFromTemplate = (nextTemplate: WorkoutTemplate | null) => {
+    setName(nextTemplate?.name ?? '');
+    setFolder(nextTemplate?.folder ?? 'My Workouts');
+    setDraftExercises(
+      nextTemplate?.exercises.map((exercise) => ({
+        ...exercise,
+        sets: exercise.sets.map((set) => ({ ...set })),
+      })) ?? [],
+    );
+    setPickerOpen(false);
+    setQuery('');
+  };
+
+  const visible = Boolean(template);
+
+  // Modal content is recreated whenever the selected template changes through this key.
+  const editorKey = template?.id ?? 'closed';
+
+  const updateSet = (
+    exerciseId: string,
+    setId: string,
+    field: 'weight' | 'reps' | 'rpe' | 'rir',
+    value: number | undefined,
+  ) => {
+    setDraftExercises((current) =>
+      current.map((exercise) =>
+        exercise.id !== exerciseId
+          ? exercise
+          : {
+              ...exercise,
+              sets: exercise.sets.map((set) => {
+                if (set.id !== setId) return set;
+                if (field === 'rpe') return { ...set, rpe: value, rir: undefined };
+                if (field === 'rir') return { ...set, rir: value, rpe: undefined };
+                return { ...set, [field]: value };
+              }),
+            },
+      ),
+    );
+  };
+
+  const cycleEffort = (exerciseId: string, setId: string) => {
+    setDraftExercises((current) =>
+      current.map((exercise) =>
+        exercise.id !== exerciseId
+          ? exercise
+          : {
+              ...exercise,
+              sets: exercise.sets.map((set) => {
+                if (set.id !== setId) return set;
+                if (set.rpe !== undefined) return { ...set, rpe: undefined, rir: 2 };
+                if (set.rir !== undefined) return { ...set, rpe: undefined, rir: undefined };
+                return { ...set, rpe: 8, rir: undefined };
+              }),
+            },
+      ),
+    );
+  };
+
+  const addSetToExercise = (exerciseId: string) => {
+    setDraftExercises((current) =>
+      current.map((exercise) => {
+        if (exercise.id !== exerciseId) return exercise;
+        const last = exercise.sets.at(-1);
+        return {
+          ...exercise,
+          sets: [
+            ...exercise.sets,
+            {
+              id: `${exercise.id}-template-set-${Date.now()}`,
+              weight: last?.weight,
+              reps: last?.reps,
+              rpe: last?.rpe,
+              rir: last?.rir,
+              completed: false,
+            },
+          ],
+        };
+      }),
+    );
+  };
+
+  const removeSetFromExercise = (exerciseId: string, setId: string) => {
+    setDraftExercises((current) =>
+      current.map((exercise) =>
+        exercise.id !== exerciseId || exercise.sets.length <= 1
+          ? exercise
+          : { ...exercise, sets: exercise.sets.filter((set) => set.id !== setId) },
+      ),
+    );
+  };
+
+  const removeExerciseFromTemplate = (exerciseId: string) => {
+    setDraftExercises((current) => current.filter((exercise) => exercise.id !== exerciseId));
+  };
+
+  const addExerciseToTemplate = (definition: ExerciseDefinition) => {
+    if (draftExercises.some((exercise) => exercise.name === definition.name)) return;
+    const stamp = Date.now();
+    setDraftExercises((current) => [
+      ...current,
+      {
+        id: `${template?.id ?? 'template'}-${definition.id}-${stamp}`,
+        name: definition.name,
+        sets: Array.from({ length: 3 }, (_, index) => ({
+          id: `${definition.id}-${stamp}-${index + 1}`,
+          weight: definition.defaultWeight,
+          reps: definition.defaultReps ?? 8,
+          completed: false,
+        })),
+      },
+    ]);
+    setPickerOpen(false);
+    setQuery('');
+  };
+
+  const filteredExercises = useMemo(() => {
+    const normalized = query.trim().toLowerCase();
+    return exercises.filter(
+      (exercise) =>
+        !draftExercises.some((draft) => draft.name === exercise.name) &&
+        (!normalized ||
+          exercise.name.toLowerCase().includes(normalized) ||
+          exercise.detail.toLowerCase().includes(normalized)),
+    );
+  }, [draftExercises, exercises, query]);
+
+  const submit = () => {
+    if (!template) return;
+    if (!name.trim()) {
+      showPrototypeNotice('Template name required', 'Enter a name for this template.');
+      return;
+    }
+    if (draftExercises.length === 0) {
+      showPrototypeNotice('Add an exercise', 'A template needs at least one exercise.');
+      return;
+    }
+    onSave({ id: template.id, name, folder, exercises: draftExercises });
+  };
+
+  return (
+    <Modal
+      key={editorKey}
+      transparent
+      visible={visible}
+      animationType="slide"
+      onShow={() => resetFromTemplate(template)}
+      onRequestClose={onClose}
+    >
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={styles.modalBackdrop}
+      >
+        <View style={[styles.modalCard, styles.editorModalCard]}>
+          <ScrollView
+            contentContainerStyle={styles.editorContent}
+            keyboardShouldPersistTaps="handled"
+          >
+            <Text style={styles.modalTitle}>Edit Template</Text>
+            <Text style={styles.modalDetail}>
+              Set the exact weight, reps, and RPE or RIR target for every set.
+            </Text>
+
+            <FormField
+              label="Template name"
+              value={name}
+              onChangeText={setName}
+              placeholder="Upper A"
+            />
+            <FormField
+              label="Folder / split"
+              value={folder}
+              onChangeText={setFolder}
+              placeholder="Upper / Lower"
+            />
+
+            {draftExercises.map((exercise) => (
+              <View key={exercise.id} style={styles.templateExerciseCard}>
+                <View style={styles.templateExerciseHeader}>
+                  <View style={styles.workoutCopy}>
+                    <Text style={styles.exerciseName}>{exercise.name}</Text>
+                    <Text style={styles.workoutDetail}>
+                      {exercise.sets.length} planned set{exercise.sets.length === 1 ? '' : 's'}
+                    </Text>
+                  </View>
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => removeExerciseFromTemplate(exercise.id)}
+                    style={({ pressed }) => [styles.removeButton, pressed && styles.pressed]}
+                  >
+                    <Text style={styles.removeButtonLabel}>Remove</Text>
+                  </Pressable>
+                </View>
+
+                <View style={styles.templateSetHeader}>
+                  <Text style={[styles.templateColumnLabel, styles.templateSetNumberColumn]}>SET</Text>
+                  <Text style={[styles.templateColumnLabel, styles.templateInputColumn]}>LB</Text>
+                  <Text style={[styles.templateColumnLabel, styles.templateInputColumn]}>REPS</Text>
+                  <Text style={[styles.templateColumnLabel, styles.templateEffortColumn]}>RPE/RIR</Text>
+                  <Text style={[styles.templateColumnLabel, styles.templateRemoveColumn]}> </Text>
+                </View>
+
+                {exercise.sets.map((set, index) => (
+                  <View key={set.id} style={styles.templateSetRow}>
+                    <Text style={[styles.templateSetNumber, styles.templateSetNumberColumn]}>
+                      {index + 1}
+                    </Text>
+                    <CompactNumberInput
+                      value={set.weight}
+                      decimal
+                      onCommit={(value) => updateSet(exercise.id, set.id, 'weight', value)}
+                    />
+                    <CompactNumberInput
+                      value={set.reps}
+                      onCommit={(value) => updateSet(exercise.id, set.id, 'reps', value)}
+                    />
+                    <View style={styles.templateEffortColumn}>
+                      <Pressable
+                        accessibilityRole="button"
+                        onPress={() => cycleEffort(exercise.id, set.id)}
+                        style={({ pressed }) => [
+                          styles.effortModeButton,
+                          pressed && styles.pressed,
+                        ]}
+                      >
+                        <Text style={styles.effortModeLabel}>
+                          {set.rpe !== undefined ? 'RPE' : set.rir !== undefined ? 'RIR' : 'None'}
+                        </Text>
+                      </Pressable>
+                      {set.rpe !== undefined ? (
+                        <CompactNumberInput
+                          value={set.rpe}
+                          decimal
+                          narrow
+                          onCommit={(value) => updateSet(exercise.id, set.id, 'rpe', value)}
+                        />
+                      ) : set.rir !== undefined ? (
+                        <CompactNumberInput
+                          value={set.rir}
+                          decimal
+                          narrow
+                          onCommit={(value) => updateSet(exercise.id, set.id, 'rir', value)}
+                        />
+                      ) : null}
+                    </View>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`Remove set ${index + 1}`}
+                      onPress={() => removeSetFromExercise(exercise.id, set.id)}
+                      disabled={exercise.sets.length <= 1}
+                      style={({ pressed }) => [
+                        styles.templateRemoveColumn,
+                        styles.removeSetButton,
+                        exercise.sets.length <= 1 && styles.disabledControl,
+                        pressed && styles.pressed,
+                      ]}
+                    >
+                      <Text style={styles.removeSetLabel}>×</Text>
+                    </Pressable>
+                  </View>
+                ))}
+
+                <PrimaryButton
+                  label="+ Add Set"
+                  onPress={() => addSetToExercise(exercise.id)}
+                  variant="secondary"
+                />
+              </View>
+            ))}
+
+            <PrimaryButton
+              label={pickerOpen ? 'Close Exercise Picker' : '+ Add Exercise'}
+              onPress={() => setPickerOpen((current) => !current)}
+              variant="secondary"
+            />
+
+            {pickerOpen ? (
+              <View style={styles.editorPicker}>
+                <TextInput
+                  value={query}
+                  onChangeText={setQuery}
+                  placeholder="Search exercises..."
+                  placeholderTextColor={colors.textMuted}
+                  style={styles.formInput}
+                />
+                {filteredExercises.map((exercise) => (
+                  <Pressable
+                    key={exercise.id}
+                    accessibilityRole="button"
+                    onPress={() => addExerciseToTemplate(exercise)}
+                    style={({ pressed }) => [styles.selectionRow, pressed && styles.pressed]}
+                  >
+                    <View style={styles.workoutCopy}>
+                      <Text style={styles.exerciseName}>{exercise.name}</Text>
+                      <Text style={styles.workoutDetail}>{exercise.detail}</Text>
+                    </View>
+                    <Text style={styles.addExerciseLabel}>Add</Text>
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
+
+            <PrimaryButton label="Save Template" onPress={submit} />
+            <PrimaryButton label="Cancel" onPress={onClose} variant="secondary" />
+          </ScrollView>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
+function CompactNumberInput({
+  value,
+  onCommit,
+  decimal = false,
+  narrow = false,
+}: {
+  value?: number;
+  onCommit: (value: number | undefined) => void;
+  decimal?: boolean;
+  narrow?: boolean;
+}) {
+  const [text, setText] = useState(value === undefined ? '' : String(value));
+
+  const commit = () => {
+    const normalized = text.trim().replace(',', '.');
+    if (!normalized) {
+      onCommit(undefined);
+      return;
+    }
+    const parsed = decimal ? Number.parseFloat(normalized) : Number.parseInt(normalized, 10);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      setText(value === undefined ? '' : String(value));
+      return;
+    }
+    onCommit(parsed);
+    setText(String(parsed));
+  };
+
+  return (
+    <View style={[styles.templateInputColumn, narrow && styles.narrowInputColumn]}>
+      <TextInput
+        value={text}
+        onChangeText={setText}
+        onBlur={commit}
+        onSubmitEditing={commit}
+        inputMode={decimal ? 'decimal' : 'numeric'}
+        keyboardType={decimal ? 'decimal-pad' : 'number-pad'}
+        selectTextOnFocus
+        placeholder="—"
+        placeholderTextColor={colors.textMuted}
+        style={styles.compactInput}
+      />
+    </View>
+  );
+}
+
+function formatTemplateSet(set: WorkoutSet) {
+  const weight = set.weight === undefined ? '— lb' : `${set.weight} lb`;
+  const reps = set.reps === undefined ? '— reps' : `${set.reps} reps`;
+  const effort =
+    set.rpe !== undefined ? ` · RPE ${set.rpe}` : set.rir !== undefined ? ` · RIR ${set.rir}` : '';
+  return `${weight} × ${reps}${effort}`;
+}
+
 function TypeChoice({
   label,
   selected,
@@ -852,4 +1287,144 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '900',
   },
+  previewSetText: {
+    color: colors.textMuted,
+    fontSize: 13,
+    lineHeight: 20,
+    marginTop: 4,
+  },
+  editorModalCard: {
+    maxHeight: '94%',
+    padding: 0,
+    overflow: 'hidden',
+  },
+  editorContent: {
+    padding: spacing.lg,
+    paddingBottom: spacing.xl,
+    gap: spacing.md,
+  },
+  templateExerciseCard: {
+    gap: spacing.sm,
+    padding: spacing.md,
+    borderRadius: radius.md,
+    borderColor: colors.border,
+    borderWidth: 1,
+    backgroundColor: colors.surfaceElevated,
+  },
+  templateExerciseHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  removeButton: {
+    minHeight: 36,
+    paddingHorizontal: spacing.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radius.sm,
+    borderColor: colors.danger,
+    borderWidth: 1,
+  },
+  removeButtonLabel: {
+    color: colors.danger,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  templateSetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  templateSetRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  templateColumnLabel: {
+    color: colors.textMuted,
+    fontSize: 9,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  templateSetNumberColumn: {
+    width: 28,
+  },
+  templateInputColumn: {
+    width: 58,
+  },
+  narrowInputColumn: {
+    width: 48,
+  },
+  templateEffortColumn: {
+    minWidth: 104,
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+  },
+  templateRemoveColumn: {
+    width: 28,
+  },
+  templateSetNumber: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  compactInput: {
+    width: '100%',
+    minHeight: 42,
+    paddingHorizontal: 4,
+    color: colors.text,
+    backgroundColor: colors.background,
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: radius.sm,
+    fontSize: 14,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  effortModeButton: {
+    minHeight: 34,
+    minWidth: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 6,
+    borderRadius: radius.sm,
+    borderColor: colors.border,
+    borderWidth: 1,
+    backgroundColor: colors.background,
+  },
+  effortModeLabel: {
+    color: colors.primary,
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  removeSetButton: {
+    minHeight: 38,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  removeSetLabel: {
+    color: colors.danger,
+    fontSize: 22,
+    fontWeight: '900',
+  },
+  disabledControl: {
+    opacity: 0.25,
+  },
+  editorPicker: {
+    gap: spacing.xs,
+    padding: spacing.sm,
+    borderRadius: radius.md,
+    borderColor: colors.border,
+    borderWidth: 1,
+  },
+  addExerciseLabel: {
+    color: colors.primary,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+
 });

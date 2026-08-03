@@ -281,48 +281,57 @@ function ExerciseCard({
       </View>
 
       {exercise.sets.map((set, index) => (
-        <View key={set.id} style={[styles.setRow, set.completed && styles.completedRow]}>
-          <Text style={[styles.setNumber, styles.setColumn]}>{index + 1}</Text>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`Copy previous values for set ${index + 1}`}
-            onPress={() => onCopyPrevious(set.id)}
-            style={({ pressed }) => [
-              styles.previousColumn,
-              styles.previousButton,
-              pressed && styles.previousButtonPressed,
-            ]}
-          >
-            <Text style={styles.previousText}>
-              {set.previousWeight ?? '—'} × {set.previousReps ?? '—'}
-            </Text>
-          </Pressable>
-          <SetValueInput
-            value={set.weight}
-            decimal
-            accessibilityLabel={`${exercise.name} set ${index + 1} weight`}
-            onCommit={(value) => onUpdateValue(set.id, 'weight', value)}
-          />
-          <SetValueInput
-            value={set.reps}
-            accessibilityLabel={`${exercise.name} set ${index + 1} reps`}
-            onCommit={(value) => onUpdateValue(set.id, 'reps', value)}
-          />
-          <Pressable
-            accessibilityRole="checkbox"
-            accessibilityState={{ checked: set.completed }}
-            onPress={() => onToggle(set.id)}
-            style={({ pressed }) => [
-              styles.checkButton,
-              styles.doneColumn,
-              set.completed && styles.checkButtonComplete,
-              pressed && styles.pressed,
-            ]}
-          >
-            <Text style={set.completed ? styles.checkComplete : styles.checkEmpty}>
-              {set.completed ? '✓' : ''}
-            </Text>
-          </Pressable>
+        <View key={set.id}>
+          <View style={[styles.setRow, set.completed && styles.completedRow]}>
+            <Text style={[styles.setNumber, styles.setColumn]}>{index + 1}</Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Copy previous values for set ${index + 1}`}
+              onPress={() => onCopyPrevious(set.id)}
+              style={({ pressed }) => [
+                styles.previousColumn,
+                styles.previousButton,
+                pressed && styles.previousButtonPressed,
+              ]}
+            >
+              <Text style={styles.previousText}>
+                {set.previousWeight ?? '—'} × {set.previousReps ?? '—'}
+              </Text>
+            </Pressable>
+            <SetValueInput
+              value={set.weight}
+              decimal
+              accessibilityLabel={`${exercise.name} set ${index + 1} weight`}
+              onCommit={(value) => onUpdateValue(set.id, 'weight', value)}
+            />
+            <SetValueInput
+              value={set.reps}
+              accessibilityLabel={`${exercise.name} set ${index + 1} reps`}
+              onCommit={(value) => onUpdateValue(set.id, 'reps', value)}
+            />
+            <Pressable
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: set.completed }}
+              onPress={() => onToggle(set.id)}
+              style={({ pressed }) => [
+                styles.checkButton,
+                styles.doneColumn,
+                set.completed && styles.checkButtonComplete,
+                pressed && styles.pressed,
+              ]}
+            >
+              <Text style={set.completed ? styles.checkComplete : styles.checkEmpty}>
+                {set.completed ? '✓' : ''}
+              </Text>
+            </Pressable>
+          </View>
+          {set.rpe !== undefined || set.rir !== undefined ? (
+            <View style={styles.effortTargetRow}>
+              <Text style={styles.effortTargetLabel}>
+                Target: {set.rpe !== undefined ? `RPE ${set.rpe}` : `RIR ${set.rir}`}
+              </Text>
+            </View>
+          ) : null}
         </View>
       ))}
 
@@ -871,4 +880,15 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '800',
   },
+  effortTargetRow: {
+    alignItems: 'flex-end',
+    paddingRight: 44,
+    paddingBottom: 5,
+  },
+  effortTargetLabel: {
+    color: colors.primary,
+    fontSize: 10,
+    fontWeight: '800',
+  },
+
 });

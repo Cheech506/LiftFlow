@@ -21,6 +21,7 @@ export type WorkoutSet = {
   weight?: number;
   reps?: number;
   rpe?: number;
+  rir?: number;
   completed: boolean;
 };
 
@@ -80,6 +81,13 @@ export type CreateTemplateInput = {
   setCount: number;
 };
 
+export type UpdateTemplateInput = {
+  id: string;
+  name: string;
+  folder: string;
+  exercises: WorkoutExercise[];
+};
+
 type ActiveWorkoutContextValue = {
   workout: ActiveWorkout | null;
   exercises: ExerciseDefinition[];
@@ -91,6 +99,7 @@ type ActiveWorkoutContextValue = {
   lastSavedAt: number | null;
   createExercise: (input: CreateExerciseInput) => ExerciseDefinition;
   createTemplate: (input: CreateTemplateInput) => WorkoutTemplate;
+  updateTemplate: (input: UpdateTemplateInput) => WorkoutTemplate | null;
   startWorkout: (name: string, templateId?: string) => void;
   toggleSet: (exerciseId: string, setId: string) => void;
   updateSetValue: (
@@ -260,6 +269,7 @@ const cloneTemplateExercises = (template: WorkoutTemplate): WorkoutExercise[] =>
       weight: set.weight,
       reps: set.reps,
       rpe: set.rpe,
+      rir: set.rir,
       completed: false,
     })),
   }));
@@ -271,6 +281,11 @@ function toId(value: string) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/(^-|-$)/g, '');
+}
+
+function getTemplateDetail(exercises: WorkoutExercise[]) {
+  const setCount = exercises.reduce((total, exercise) => total + exercise.sets.length, 0);
+  return `${exercises.length} exercise${exercises.length === 1 ? '' : 's'} · ${setCount} planned sets`;
 }
 
 export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
@@ -369,23 +384,23 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
         .filter((exercise): exercise is ExerciseDefinition => Boolean(exercise));
       const safeSetCount = Math.min(10, Math.max(1, Math.round(input.setCount)));
 
+      const templateExercises: WorkoutExercise[] = selectedExercises.map((definition) => ({
+        id: `${templateId}-${definition.id}`,
+        name: definition.name,
+        sets: Array.from({ length: safeSetCount }, (_, index) => ({
+          id: `${templateId}-${definition.id}-${index + 1}`,
+          weight: definition.defaultWeight,
+          reps: definition.defaultReps ?? 8,
+          completed: false,
+        })),
+      }));
+
       const template: WorkoutTemplate = {
         id: templateId,
         name: input.name.trim(),
         folder: input.folder.trim() || 'My Workouts',
-        detail: `${selectedExercises.length} exercise${
-          selectedExercises.length === 1 ? '' : 's'
-        } · ${selectedExercises.length * safeSetCount} planned sets`,
-        exercises: selectedExercises.map((definition) => ({
-          id: `${templateId}-${definition.id}`,
-          name: definition.name,
-          sets: Array.from({ length: safeSetCount }, (_, index) => ({
-            id: `${templateId}-${definition.id}-${index + 1}`,
-            weight: definition.defaultWeight,
-            reps: definition.defaultReps ?? 8,
-            completed: false,
-          })),
-        })),
+        detail: getTemplateDetail(templateExercises),
+        exercises: templateExercises,
       };
 
       setTemplates((current) => [...current, template]);
@@ -393,6 +408,37 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
     },
     [exercises],
   );
+
+  const updateTemplate = useCallback((input: UpdateTemplateInput) => {
+    const trimmedName = input.name.trim();
+    const trimmedFolder = input.folder.trim() || 'My Workouts';
+    if (!trimmedName || input.exercises.length === 0) return null;
+
+    const normalizedExercises = input.exercises.map((exercise, exerciseIndex) => ({
+      ...exercise,
+      id: exercise.id || `${input.id}-exercise-${exerciseIndex + 1}`,
+      sets: exercise.sets.map((set, setIndex) => ({
+        ...set,
+        id: set.id || `${input.id}-${exercise.id || exerciseIndex + 1}-set-${setIndex + 1}`,
+        completed: false,
+        rpe: set.rpe,
+        rir: set.rir,
+      })),
+    }));
+
+    const updatedTemplate: WorkoutTemplate = {
+      id: input.id,
+      name: trimmedName,
+      folder: trimmedFolder,
+      detail: getTemplateDetail(normalizedExercises),
+      exercises: normalizedExercises,
+    };
+
+    setTemplates((current) =>
+      current.map((template) => (template.id === input.id ? updatedTemplate : template)),
+    );
+    return updatedTemplate;
+  }, []);
 
   const startWorkout = useCallback(
     (name: string, templateId?: string) => {
@@ -602,6 +648,7 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
                   weight: set.weight,
                   reps: set.reps,
                   rpe: set.rpe,
+                  rir: set.rir,
                   completed: false,
                 })),
               })),
@@ -638,6 +685,7 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
       lastSavedAt,
       createExercise,
       createTemplate,
+      updateTemplate,
       startWorkout,
       toggleSet,
       updateSetValue,
@@ -660,6 +708,7 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
       lastSavedAt,
       createExercise,
       createTemplate,
+      updateTemplate,
       startWorkout,
       toggleSet,
       updateSetValue,
