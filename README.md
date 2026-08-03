@@ -1,10 +1,10 @@
 # LiftFlow
 
-LiftFlow is an open-source, self-hosted workout tracker inspired by Strong. The mobile foundation currently includes five main tabs, Settings outside the tab bar, a modal Active Workout experience, and persistent local workout data.
+LiftFlow is an open-source, self-hosted workout tracker inspired by Strong. The mobile foundation includes five main tabs, Settings outside the tab bar, a modal Active Workout experience, and persistent local workout data.
 
 ## Current foundation
 
-- Expo SDK 57
+- Expo SDK 54 for physical-device testing through Expo Go
 - React Native + TypeScript
 - Expo Router
 - Exactly five tabs: Home, Exercises, Workouts, History, Progress
@@ -24,7 +24,11 @@ npm install
 npx expo start
 ```
 
-Then open the project using the web build, an Android emulator/device, or an iOS simulator/development build.
+Scan the QR code with Expo Go on an iPhone or Android device connected to the same network. If LAN discovery does not work, use:
+
+```bash
+npx expo start --tunnel --clear
+```
 
 ## Local-first behavior
 
