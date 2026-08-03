@@ -1,0 +1,28 @@
+{
+  "expo": {
+    "name": "LiftFlow",
+    "slug": "liftflow",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "liftflow",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.cheech.liftflow"
+    },
+    "android": {
+      "package": "com.cheech.liftflow",
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static"
+    },
+    "plugins": [
+      "expo-router"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
