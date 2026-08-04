@@ -11,6 +11,10 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import {
+  NumericKeyboardAccessory,
+  NUMERIC_KEYBOARD_ACCESSORY_ID,
+} from '@/components/KeyboardAwareModal';
 import { PrimaryButton } from '@/components/PrimaryButton';
 import { ExerciseDefinition } from '@/constants/exercises';
 import { colors, radius, spacing } from '@/constants/theme';
@@ -134,7 +138,13 @@ export default function ActiveWorkoutScreen() {
         </Pressable>
       </View>
 
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        automaticallyAdjustKeyboardInsets
+        contentContainerStyle={styles.content}
+        contentInsetAdjustmentBehavior="automatic"
+        keyboardDismissMode="interactive"
+        keyboardShouldPersistTaps="handled"
+      >
         <View style={styles.workoutHeader}>
           <Text style={styles.workoutName}>{workout.name}</Text>
           <Text style={styles.elapsed}>{formatDuration(elapsed)}</Text>
@@ -231,6 +241,8 @@ export default function ActiveWorkoutScreen() {
           setExerciseMenuId(null);
         }}
       />
+
+      <NumericKeyboardAccessory />
     </SafeAreaView>
   );
 }
@@ -432,6 +444,8 @@ function SetValueInput({
         onSubmitEditing={commit}
         inputMode={decimal ? 'decimal' : 'numeric'}
         keyboardType={decimal ? 'decimal-pad' : 'number-pad'}
+        inputAccessoryViewID={NUMERIC_KEYBOARD_ACCESSORY_ID}
+        returnKeyType="done"
         selectTextOnFocus
         placeholder="—"
         placeholderTextColor={colors.textMuted}

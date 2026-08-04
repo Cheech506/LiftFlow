@@ -1,9 +1,7 @@
 import { useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
 import {
-  KeyboardAvoidingView,
   Modal,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -12,6 +10,10 @@ import {
   View,
 } from 'react-native';
 
+import {
+  KeyboardAwareModal,
+  NUMERIC_KEYBOARD_ACCESSORY_ID,
+} from '@/components/KeyboardAwareModal';
 import { PrimaryButton } from '@/components/PrimaryButton';
 import { SectionCard } from '@/components/SectionCard';
 import { ExerciseDefinition, ExerciseType } from '@/constants/exercises';
@@ -430,187 +432,179 @@ function CreateTemplateModal({
   };
 
   return (
-    <Modal transparent visible={visible} animationType="slide" onRequestClose={closeAndReset}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={styles.modalBackdrop}
-      >
-        <View style={[styles.modalCard, styles.createModalCard]}>
-          <ScrollView
-            contentContainerStyle={styles.createModalContent}
-            keyboardShouldPersistTaps="handled"
-            style={styles.createModalScroll}
+    <KeyboardAwareModal
+      visible={visible}
+      onClose={closeAndReset}
+      cardStyle={styles.createModalCard}
+      contentContainerStyle={styles.createModalContent}
+    >
+      <Text style={styles.modalTitle}>New Template</Text>
+      <Text style={styles.modalDetail}>
+        Choose a name, folder, exercises, and the starting number of sets.
+      </Text>
+
+      <FormField
+        label="Template name"
+        value={name}
+        onChangeText={setName}
+        placeholder="Upper A"
+      />
+      <FormField
+        label="Folder / split"
+        value={folder}
+        onChangeText={setFolder}
+        placeholder="Upper / Lower"
+      />
+
+      <View style={styles.fieldGroup}>
+        <Text style={styles.fieldLabel}>Sets per exercise</Text>
+        <View style={styles.stepper}>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => setSetCount((current) => Math.max(1, current - 1))}
+            style={({ pressed }) => [styles.stepButton, pressed && styles.pressed]}
           >
-            <Text style={styles.modalTitle}>New Template</Text>
-            <Text style={styles.modalDetail}>
-              Choose a name, folder, exercises, and the starting number of sets.
-            </Text>
+            <Text style={styles.stepLabel}>−</Text>
+          </Pressable>
+          <Text style={styles.stepValue}>{setCount}</Text>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => setSetCount((current) => Math.min(10, current + 1))}
+            style={({ pressed }) => [styles.stepButton, pressed && styles.pressed]}
+          >
+            <Text style={styles.stepLabel}>+</Text>
+          </Pressable>
+        </View>
+      </View>
 
-            <FormField
-              label="Template name"
-              value={name}
-              onChangeText={setName}
-              placeholder="Upper A"
-            />
-            <FormField
-              label="Folder / split"
-              value={folder}
-              onChangeText={setFolder}
-              placeholder="Upper / Lower"
-            />
+      <View style={styles.fieldGroup}>
+        <Text style={styles.fieldLabel}>
+          Exercises · {selectedExerciseIds.length} selected
+        </Text>
+        <TextInput
+          value={query}
+          onChangeText={setQuery}
+          placeholder="Search exercises..."
+          placeholderTextColor={colors.textMuted}
+          style={styles.formInput}
+        />
+      </View>
 
-            <View style={styles.fieldGroup}>
-              <Text style={styles.fieldLabel}>Sets per exercise</Text>
-              <View style={styles.stepper}>
-                <Pressable
-                  accessibilityRole="button"
-                  onPress={() => setSetCount((current) => Math.max(1, current - 1))}
-                  style={({ pressed }) => [styles.stepButton, pressed && styles.pressed]}
-                >
-                  <Text style={styles.stepLabel}>−</Text>
-                </Pressable>
-                <Text style={styles.stepValue}>{setCount}</Text>
-                <Pressable
-                  accessibilityRole="button"
-                  onPress={() => setSetCount((current) => Math.min(10, current + 1))}
-                  style={({ pressed }) => [styles.stepButton, pressed && styles.pressed]}
-                >
-                  <Text style={styles.stepLabel}>+</Text>
-                </Pressable>
-              </View>
-            </View>
+      <PrimaryButton
+        label={showCreateExercise ? 'Hide New Exercise Form' : '+ Create New Exercise'}
+        onPress={() => {
+          setCreatedMessage(null);
+          setShowCreateExercise((current) => !current);
+        }}
+        variant="secondary"
+      />
 
-            <View style={styles.fieldGroup}>
-              <Text style={styles.fieldLabel}>
-                Exercises · {selectedExerciseIds.length} selected
-              </Text>
-              <TextInput
-                value={query}
-                onChangeText={setQuery}
-                placeholder="Search exercises..."
-                placeholderTextColor={colors.textMuted}
-                style={styles.formInput}
+      {showCreateExercise ? (
+        <View style={styles.inlineExerciseForm}>
+          <Text style={styles.inlineFormTitle}>Create and add an exercise</Text>
+          <Text style={styles.modalDetail}>
+            The new exercise will be saved to My Exercises and selected for this template.
+          </Text>
+
+          <FormField
+            label="Exercise name"
+            value={newExerciseName}
+            onChangeText={setNewExerciseName}
+            placeholder="Cable Y Raise"
+          />
+          <FormField
+            label="Primary muscle"
+            value={newPrimaryMuscle}
+            onChangeText={setNewPrimaryMuscle}
+            placeholder="Shoulders"
+          />
+          <FormField
+            label="Equipment"
+            value={newEquipment}
+            onChangeText={setNewEquipment}
+            placeholder="Cable"
+          />
+
+          <View style={styles.fieldGroup}>
+            <Text style={styles.fieldLabel}>Tracking type</Text>
+            <View style={styles.typeChoices}>
+              <TypeChoice
+                label="Weight & Reps"
+                selected={newExerciseType === 'Weight & Reps'}
+                onPress={() => setNewExerciseType('Weight & Reps')}
+              />
+              <TypeChoice
+                label="Bodyweight"
+                selected={newExerciseType === 'Bodyweight'}
+                onPress={() => setNewExerciseType('Bodyweight')}
               />
             </View>
+          </View>
 
-            <PrimaryButton
-              label={showCreateExercise ? 'Hide New Exercise Form' : '+ Create New Exercise'}
-              onPress={() => {
-                setCreatedMessage(null);
-                setShowCreateExercise((current) => !current);
-              }}
-              variant="secondary"
+          {newExerciseType === 'Weight & Reps' ? (
+            <FormField
+              label="Default weight (optional)"
+              value={newDefaultWeight}
+              onChangeText={setNewDefaultWeight}
+              placeholder="25"
+              keyboardType="decimal-pad"
             />
+          ) : null}
+          <FormField
+            label="Default reps"
+            value={newDefaultReps}
+            onChangeText={setNewDefaultReps}
+            placeholder="8"
+            keyboardType="number-pad"
+          />
 
-            {showCreateExercise ? (
-              <View style={styles.inlineExerciseForm}>
-                <Text style={styles.inlineFormTitle}>Create and add an exercise</Text>
-                <Text style={styles.modalDetail}>
-                  The new exercise will be saved to My Exercises and selected for this template.
-                </Text>
-
-                <FormField
-                  label="Exercise name"
-                  value={newExerciseName}
-                  onChangeText={setNewExerciseName}
-                  placeholder="Cable Y Raise"
-                />
-                <FormField
-                  label="Primary muscle"
-                  value={newPrimaryMuscle}
-                  onChangeText={setNewPrimaryMuscle}
-                  placeholder="Shoulders"
-                />
-                <FormField
-                  label="Equipment"
-                  value={newEquipment}
-                  onChangeText={setNewEquipment}
-                  placeholder="Cable"
-                />
-
-                <View style={styles.fieldGroup}>
-                  <Text style={styles.fieldLabel}>Tracking type</Text>
-                  <View style={styles.typeChoices}>
-                    <TypeChoice
-                      label="Weight & Reps"
-                      selected={newExerciseType === 'Weight & Reps'}
-                      onPress={() => setNewExerciseType('Weight & Reps')}
-                    />
-                    <TypeChoice
-                      label="Bodyweight"
-                      selected={newExerciseType === 'Bodyweight'}
-                      onPress={() => setNewExerciseType('Bodyweight')}
-                    />
-                  </View>
-                </View>
-
-                {newExerciseType === 'Weight & Reps' ? (
-                  <FormField
-                    label="Default weight (optional)"
-                    value={newDefaultWeight}
-                    onChangeText={setNewDefaultWeight}
-                    placeholder="25"
-                    keyboardType="decimal-pad"
-                  />
-                ) : null}
-                <FormField
-                  label="Default reps"
-                  value={newDefaultReps}
-                  onChangeText={setNewDefaultReps}
-                  placeholder="8"
-                  keyboardType="number-pad"
-                />
-
-                <PrimaryButton label="Save & Add Exercise" onPress={submitNewExercise} />
-                <PrimaryButton
-                  label="Cancel Exercise"
-                  onPress={() => {
-                    setShowCreateExercise(false);
-                    resetExerciseDraft();
-                  }}
-                  variant="secondary"
-                />
-              </View>
-            ) : null}
-
-            {createdMessage ? <Text style={styles.successMessage}>{createdMessage}</Text> : null}
-
-            <View style={styles.selectionList}>
-              {filteredExercises.map((exercise) => {
-                const selected = selectedExerciseIds.includes(exercise.id);
-                return (
-                  <Pressable
-                    accessibilityRole="checkbox"
-                    accessibilityState={{ checked: selected }}
-                    key={exercise.id}
-                    onPress={() => toggleExercise(exercise.id)}
-                    style={({ pressed }) => [
-                      styles.selectionRow,
-                      selected && styles.selectionRowSelected,
-                      pressed && styles.pressed,
-                    ]}
-                  >
-                    <View style={[styles.checkbox, selected && styles.checkboxSelected]}>
-                      <Text style={styles.checkboxLabel}>{selected ? '✓' : ''}</Text>
-                    </View>
-                    <View style={styles.workoutCopy}>
-                      <Text style={styles.exerciseName}>{exercise.name}</Text>
-                      <Text style={styles.workoutDetail}>
-                        {exercise.detail}
-                        {exercise.isCustom ? ' · Custom' : ''}
-                      </Text>
-                    </View>
-                  </Pressable>
-                );
-              })}
-            </View>
-
-            <PrimaryButton label="Create Template" onPress={submit} />
-            <PrimaryButton label="Cancel" onPress={closeAndReset} variant="secondary" />
-          </ScrollView>
+          <PrimaryButton label="Save & Add Exercise" onPress={submitNewExercise} />
+          <PrimaryButton
+            label="Cancel Exercise"
+            onPress={() => {
+              setShowCreateExercise(false);
+              resetExerciseDraft();
+            }}
+            variant="secondary"
+          />
         </View>
-      </KeyboardAvoidingView>
-    </Modal>
+      ) : null}
+
+      {createdMessage ? <Text style={styles.successMessage}>{createdMessage}</Text> : null}
+
+      <View style={styles.selectionList}>
+        {filteredExercises.map((exercise) => {
+          const selected = selectedExerciseIds.includes(exercise.id);
+          return (
+            <Pressable
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: selected }}
+              key={exercise.id}
+              onPress={() => toggleExercise(exercise.id)}
+              style={({ pressed }) => [
+                styles.selectionRow,
+                selected && styles.selectionRowSelected,
+                pressed && styles.pressed,
+              ]}
+            >
+              <View style={[styles.checkbox, selected && styles.checkboxSelected]}>
+                <Text style={styles.checkboxLabel}>{selected ? '✓' : ''}</Text>
+              </View>
+              <View style={styles.workoutCopy}>
+                <Text style={styles.exerciseName}>{exercise.name}</Text>
+                <Text style={styles.workoutDetail}>
+                  {exercise.detail}
+                  {exercise.isCustom ? ' · Custom' : ''}
+                </Text>
+              </View>
+            </Pressable>
+          );
+        })}
+      </View>
+
+      <PrimaryButton label="Create Template" onPress={submit} />
+      <PrimaryButton label="Cancel" onPress={closeAndReset} variant="secondary" />
+    </KeyboardAwareModal>
   );
 }
 
@@ -814,221 +808,209 @@ function TemplateEditorModal({
   };
 
   return (
-    <Modal
+    <KeyboardAwareModal
       key={editorKey}
-      transparent
       visible={visible}
-      animationType="slide"
+      onClose={onClose}
       onShow={() => resetFromTemplate(template)}
-      onRequestClose={onClose}
+      cardStyle={styles.editorModalCard}
+      contentContainerStyle={styles.editorContent}
     >
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={styles.modalBackdrop}
-      >
-        <View style={[styles.modalCard, styles.editorModalCard]}>
-          <ScrollView
-            contentContainerStyle={styles.editorContent}
-            keyboardShouldPersistTaps="handled"
-          >
-            <Text style={styles.modalTitle}>Edit Template</Text>
-            <Text style={styles.modalDetail}>
-              Set the exact weight, reps, and RPE or RIR target for every set. Tap the set label to switch between a working set and a warm-up set.
-            </Text>
+      <Text style={styles.modalTitle}>Edit Template</Text>
+      <Text style={styles.modalDetail}>
+        Set the exact weight, reps, and RPE or RIR target for every set. Tap the set label to switch between a working set and a warm-up set.
+      </Text>
 
-            <FormField
-              label="Template name"
-              value={name}
-              onChangeText={setName}
-              placeholder="Upper A"
-            />
-            <FormField
-              label="Folder / split"
-              value={folder}
-              onChangeText={setFolder}
-              placeholder="Upper / Lower"
-            />
+      <FormField
+        label="Template name"
+        value={name}
+        onChangeText={setName}
+        placeholder="Upper A"
+      />
+      <FormField
+        label="Folder / split"
+        value={folder}
+        onChangeText={setFolder}
+        placeholder="Upper / Lower"
+      />
 
-            {draftExercises.map((exercise, exerciseIndex) => (
-              <View key={exercise.id} style={styles.templateExerciseCard}>
-                <View style={styles.templateExerciseHeader}>
-                  <View style={styles.workoutCopy}>
-                    <Text style={styles.exerciseName}>{exercise.name}</Text>
-                    <Text style={styles.workoutDetail}>
-                      {exercise.sets.length} planned set{exercise.sets.length === 1 ? '' : 's'}
-                    </Text>
-                  </View>
-                  <View style={styles.templateExerciseActions}>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={`Move ${exercise.name} up`}
-                      accessibilityState={{ disabled: exerciseIndex === 0 }}
-                      disabled={exerciseIndex === 0}
-                      onPress={() => moveExercise(exercise.id, 'up')}
-                      style={({ pressed }) => [
-                        styles.moveExerciseButton,
-                        exerciseIndex === 0 && styles.disabledControl,
-                        pressed && styles.pressed,
-                      ]}
-                    >
-                      <Text style={styles.moveExerciseButtonLabel}>↑</Text>
-                    </Pressable>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={`Move ${exercise.name} down`}
-                      accessibilityState={{ disabled: exerciseIndex === draftExercises.length - 1 }}
-                      disabled={exerciseIndex === draftExercises.length - 1}
-                      onPress={() => moveExercise(exercise.id, 'down')}
-                      style={({ pressed }) => [
-                        styles.moveExerciseButton,
-                        exerciseIndex === draftExercises.length - 1 && styles.disabledControl,
-                        pressed && styles.pressed,
-                      ]}
-                    >
-                      <Text style={styles.moveExerciseButtonLabel}>↓</Text>
-                    </Pressable>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={`Remove ${exercise.name} from template`}
-                      onPress={() => removeExerciseFromTemplate(exercise.id)}
-                      style={({ pressed }) => [styles.removeButton, pressed && styles.pressed]}
-                    >
-                      <Text style={styles.removeButtonLabel}>Remove</Text>
-                    </Pressable>
-                  </View>
-                </View>
+      {draftExercises.map((exercise, exerciseIndex) => (
+        <View key={exercise.id} style={styles.templateExerciseCard}>
+          <View style={styles.templateExerciseHeader}>
+            <View style={styles.workoutCopy}>
+              <Text style={styles.exerciseName}>{exercise.name}</Text>
+              <Text style={styles.workoutDetail}>
+                {exercise.sets.length} planned set{exercise.sets.length === 1 ? '' : 's'}
+              </Text>
+            </View>
+            <View style={styles.templateExerciseActions}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Move ${exercise.name} up`}
+                accessibilityState={{ disabled: exerciseIndex === 0 }}
+                disabled={exerciseIndex === 0}
+                onPress={() => moveExercise(exercise.id, 'up')}
+                style={({ pressed }) => [
+                  styles.moveExerciseButton,
+                  exerciseIndex === 0 && styles.disabledControl,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text style={styles.moveExerciseButtonLabel}>↑</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Move ${exercise.name} down`}
+                accessibilityState={{ disabled: exerciseIndex === draftExercises.length - 1 }}
+                disabled={exerciseIndex === draftExercises.length - 1}
+                onPress={() => moveExercise(exercise.id, 'down')}
+                style={({ pressed }) => [
+                  styles.moveExerciseButton,
+                  exerciseIndex === draftExercises.length - 1 && styles.disabledControl,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text style={styles.moveExerciseButtonLabel}>↓</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Remove ${exercise.name} from template`}
+                onPress={() => removeExerciseFromTemplate(exercise.id)}
+                style={({ pressed }) => [styles.removeButton, pressed && styles.pressed]}
+              >
+                <Text style={styles.removeButtonLabel}>Remove</Text>
+              </Pressable>
+            </View>
+          </View>
 
-                <View style={styles.templateSetHeader}>
-                  <Text style={[styles.templateColumnLabel, styles.templateSetNumberColumn]}>SET</Text>
-                  <Text style={[styles.templateColumnLabel, styles.templateInputColumn]}>LB</Text>
-                  <Text style={[styles.templateColumnLabel, styles.templateInputColumn]}>REPS</Text>
-                  <Text style={[styles.templateColumnLabel, styles.templateEffortColumn]}>RPE/RIR</Text>
-                  <Text style={[styles.templateColumnLabel, styles.templateRemoveColumn]}> </Text>
-                </View>
+          <View style={styles.templateSetHeader}>
+            <Text style={[styles.templateColumnLabel, styles.templateSetNumberColumn]}>SET</Text>
+            <Text style={[styles.templateColumnLabel, styles.templateInputColumn]}>LB</Text>
+            <Text style={[styles.templateColumnLabel, styles.templateInputColumn]}>REPS</Text>
+            <Text style={[styles.templateColumnLabel, styles.templateEffortColumn]}>RPE/RIR</Text>
+            <Text style={[styles.templateColumnLabel, styles.templateRemoveColumn]}> </Text>
+          </View>
 
-                {exercise.sets.map((set, index) => (
-                  <View key={set.id} style={styles.templateSetRow}>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={`${getSetDisplayName(exercise.sets, index)}. Tap to switch working or warm-up set.`}
-                      onPress={() => toggleSetType(exercise.id, set.id)}
-                      style={({ pressed }) => [
-                        styles.templateSetNumberColumn,
-                        styles.setTypeButton,
-                        (set.setType ?? 'normal') === 'warmup' && styles.warmupSetTypeButton,
-                        pressed && styles.pressed,
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.templateSetNumber,
-                          (set.setType ?? 'normal') === 'warmup' && styles.warmupSetNumber,
-                        ]}
-                      >
-                        {getSetLabel(exercise.sets, index)}
-                      </Text>
-                    </Pressable>
-                    <CompactNumberInput
-                      value={set.weight}
-                      decimal
-                      onCommit={(value) => updateSet(exercise.id, set.id, 'weight', value)}
-                    />
-                    <CompactNumberInput
-                      value={set.reps}
-                      onCommit={(value) => updateSet(exercise.id, set.id, 'reps', value)}
-                    />
-                    <View style={styles.templateEffortColumn}>
-                      <Pressable
-                        accessibilityRole="button"
-                        onPress={() => cycleEffort(exercise.id, set.id)}
-                        style={({ pressed }) => [
-                          styles.effortModeButton,
-                          pressed && styles.pressed,
-                        ]}
-                      >
-                        <Text style={styles.effortModeLabel}>
-                          {set.rpe !== undefined ? 'RPE' : set.rir !== undefined ? 'RIR' : 'None'}
-                        </Text>
-                      </Pressable>
-                      {set.rpe !== undefined ? (
-                        <CompactNumberInput
-                          value={set.rpe}
-                          decimal
-                          narrow
-                          onCommit={(value) => updateSet(exercise.id, set.id, 'rpe', value)}
-                        />
-                      ) : set.rir !== undefined ? (
-                        <CompactNumberInput
-                          value={set.rir}
-                          decimal
-                          narrow
-                          onCommit={(value) => updateSet(exercise.id, set.id, 'rir', value)}
-                        />
-                      ) : null}
-                    </View>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={`Remove set ${index + 1}`}
-                      onPress={() => removeSetFromExercise(exercise.id, set.id)}
-                      disabled={exercise.sets.length <= 1}
-                      style={({ pressed }) => [
-                        styles.templateRemoveColumn,
-                        styles.removeSetButton,
-                        exercise.sets.length <= 1 && styles.disabledControl,
-                        pressed && styles.pressed,
-                      ]}
-                    >
-                      <Text style={styles.removeSetLabel}>×</Text>
-                    </Pressable>
-                  </View>
-                ))}
-
-                <PrimaryButton
-                  label="+ Add Set"
-                  onPress={() => addSetToExercise(exercise.id)}
-                  variant="secondary"
-                />
+          {exercise.sets.map((set, index) => (
+            <View key={set.id} style={styles.templateSetRow}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`${getSetDisplayName(exercise.sets, index)}. Tap to switch working or warm-up set.`}
+                onPress={() => toggleSetType(exercise.id, set.id)}
+                style={({ pressed }) => [
+                  styles.templateSetNumberColumn,
+                  styles.setTypeButton,
+                  (set.setType ?? 'normal') === 'warmup' && styles.warmupSetTypeButton,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.templateSetNumber,
+                    (set.setType ?? 'normal') === 'warmup' && styles.warmupSetNumber,
+                  ]}
+                >
+                  {getSetLabel(exercise.sets, index)}
+                </Text>
+              </Pressable>
+              <CompactNumberInput
+                value={set.weight}
+                decimal
+                onCommit={(value) => updateSet(exercise.id, set.id, 'weight', value)}
+              />
+              <CompactNumberInput
+                value={set.reps}
+                onCommit={(value) => updateSet(exercise.id, set.id, 'reps', value)}
+              />
+              <View style={styles.templateEffortColumn}>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => cycleEffort(exercise.id, set.id)}
+                  style={({ pressed }) => [
+                    styles.effortModeButton,
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  <Text style={styles.effortModeLabel}>
+                    {set.rpe !== undefined ? 'RPE' : set.rir !== undefined ? 'RIR' : 'None'}
+                  </Text>
+                </Pressable>
+                {set.rpe !== undefined ? (
+                  <CompactNumberInput
+                    value={set.rpe}
+                    decimal
+                    narrow
+                    onCommit={(value) => updateSet(exercise.id, set.id, 'rpe', value)}
+                  />
+                ) : set.rir !== undefined ? (
+                  <CompactNumberInput
+                    value={set.rir}
+                    decimal
+                    narrow
+                    onCommit={(value) => updateSet(exercise.id, set.id, 'rir', value)}
+                  />
+                ) : null}
               </View>
-            ))}
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Remove set ${index + 1}`}
+                onPress={() => removeSetFromExercise(exercise.id, set.id)}
+                disabled={exercise.sets.length <= 1}
+                style={({ pressed }) => [
+                  styles.templateRemoveColumn,
+                  styles.removeSetButton,
+                  exercise.sets.length <= 1 && styles.disabledControl,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text style={styles.removeSetLabel}>×</Text>
+              </Pressable>
+            </View>
+          ))}
 
-            <PrimaryButton
-              label={pickerOpen ? 'Close Exercise Picker' : '+ Add Exercise'}
-              onPress={() => setPickerOpen((current) => !current)}
-              variant="secondary"
-            />
-
-            {pickerOpen ? (
-              <View style={styles.editorPicker}>
-                <TextInput
-                  value={query}
-                  onChangeText={setQuery}
-                  placeholder="Search exercises..."
-                  placeholderTextColor={colors.textMuted}
-                  style={styles.formInput}
-                />
-                {filteredExercises.map((exercise) => (
-                  <Pressable
-                    key={exercise.id}
-                    accessibilityRole="button"
-                    onPress={() => addExerciseToTemplate(exercise)}
-                    style={({ pressed }) => [styles.selectionRow, pressed && styles.pressed]}
-                  >
-                    <View style={styles.workoutCopy}>
-                      <Text style={styles.exerciseName}>{exercise.name}</Text>
-                      <Text style={styles.workoutDetail}>{exercise.detail}</Text>
-                    </View>
-                    <Text style={styles.addExerciseLabel}>Add</Text>
-                  </Pressable>
-                ))}
-              </View>
-            ) : null}
-
-            <PrimaryButton label="Save Template" onPress={submit} />
-            <PrimaryButton label="Cancel" onPress={onClose} variant="secondary" />
-          </ScrollView>
+          <PrimaryButton
+            label="+ Add Set"
+            onPress={() => addSetToExercise(exercise.id)}
+            variant="secondary"
+          />
         </View>
-      </KeyboardAvoidingView>
-    </Modal>
+      ))}
+
+      <PrimaryButton
+        label={pickerOpen ? 'Close Exercise Picker' : '+ Add Exercise'}
+        onPress={() => setPickerOpen((current) => !current)}
+        variant="secondary"
+      />
+
+      {pickerOpen ? (
+        <View style={styles.editorPicker}>
+          <TextInput
+            value={query}
+            onChangeText={setQuery}
+            placeholder="Search exercises..."
+            placeholderTextColor={colors.textMuted}
+            style={styles.formInput}
+          />
+          {filteredExercises.map((exercise) => (
+            <Pressable
+              key={exercise.id}
+              accessibilityRole="button"
+              onPress={() => addExerciseToTemplate(exercise)}
+              style={({ pressed }) => [styles.selectionRow, pressed && styles.pressed]}
+            >
+              <View style={styles.workoutCopy}>
+                <Text style={styles.exerciseName}>{exercise.name}</Text>
+                <Text style={styles.workoutDetail}>{exercise.detail}</Text>
+              </View>
+              <Text style={styles.addExerciseLabel}>Add</Text>
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
+
+      <PrimaryButton label="Save Template" onPress={submit} />
+      <PrimaryButton label="Cancel" onPress={onClose} variant="secondary" />
+    </KeyboardAwareModal>
   );
 }
 
@@ -1069,6 +1051,8 @@ function CompactNumberInput({
         onSubmitEditing={commit}
         inputMode={decimal ? 'decimal' : 'numeric'}
         keyboardType={decimal ? 'decimal-pad' : 'number-pad'}
+        inputAccessoryViewID={NUMERIC_KEYBOARD_ACCESSORY_ID}
+        returnKeyType="done"
         selectTextOnFocus
         placeholder="—"
         placeholderTextColor={colors.textMuted}
@@ -1151,6 +1135,12 @@ function FormField({
         placeholder={placeholder}
         placeholderTextColor={colors.textMuted}
         keyboardType={keyboardType}
+        inputAccessoryViewID={
+          keyboardType === 'decimal-pad' || keyboardType === 'number-pad'
+            ? NUMERIC_KEYBOARD_ACCESSORY_ID
+            : undefined
+        }
+        returnKeyType={keyboardType === 'default' ? 'next' : 'done'}
         style={styles.formInput}
       />
     </View>
@@ -1253,17 +1243,10 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   createModalCard: {
-    maxHeight: '92%',
-    padding: 0,
-    overflow: 'hidden',
-  },
-  createModalScroll: {
-    width: '100%',
+    maxWidth: 520,
   },
   createModalContent: {
-    padding: spacing.lg,
     paddingBottom: spacing.xl,
-    gap: spacing.md,
   },
   fieldGroup: {
     gap: 6,
@@ -1400,14 +1383,10 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   editorModalCard: {
-    maxHeight: '94%',
-    padding: 0,
-    overflow: 'hidden',
+    maxWidth: 620,
   },
   editorContent: {
-    padding: spacing.lg,
     paddingBottom: spacing.xl,
-    gap: spacing.md,
   },
   templateExerciseCard: {
     gap: spacing.sm,

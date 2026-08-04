@@ -1,8 +1,6 @@
 import { useMemo, useState } from 'react';
 import {
-  KeyboardAvoidingView,
   Modal,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -11,6 +9,10 @@ import {
   View,
 } from 'react-native';
 
+import {
+  KeyboardAwareModal,
+  NUMERIC_KEYBOARD_ACCESSORY_ID,
+} from '@/components/KeyboardAwareModal';
 import { PrimaryButton } from '@/components/PrimaryButton';
 import { SectionCard } from '@/components/SectionCard';
 import { ExerciseDefinition, ExerciseType } from '@/constants/exercises';
@@ -365,73 +367,71 @@ function CreateExerciseModal({
   };
 
   return (
-    <Modal transparent visible={visible} animationType="slide" onRequestClose={closeAndReset}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={styles.modalBackdrop}
-      >
-        <ScrollView
-          contentContainerStyle={[styles.modalCard, styles.formModal]}
-          keyboardShouldPersistTaps="handled"
-          style={styles.formScroll}
-        >
-          <Text style={styles.modalTitle}>Create Exercise</Text>
-          <Text style={styles.formHelp}>
-            Add your own movement and use it in workouts and templates immediately.
-          </Text>
+    <KeyboardAwareModal
+      visible={visible}
+      onClose={closeAndReset}
+      cardStyle={styles.formModalCard}
+    >
+      <Text style={styles.modalTitle}>Create Exercise</Text>
+      <Text style={styles.formHelp}>
+        Add your own movement and use it in workouts and templates immediately.
+      </Text>
 
-          <FormField label="Exercise name" value={name} onChangeText={setName} placeholder="Cable Y Raise" />
-          <FormField
-            label="Primary muscle"
-            value={primaryMuscle}
-            onChangeText={setPrimaryMuscle}
-            placeholder="Shoulders"
+      <FormField
+        label="Exercise name"
+        value={name}
+        onChangeText={setName}
+        placeholder="Cable Y Raise"
+      />
+      <FormField
+        label="Primary muscle"
+        value={primaryMuscle}
+        onChangeText={setPrimaryMuscle}
+        placeholder="Shoulders"
+      />
+      <FormField
+        label="Equipment"
+        value={equipment}
+        onChangeText={setEquipment}
+        placeholder="Cable"
+      />
+
+      <View style={styles.fieldGroup}>
+        <Text style={styles.fieldLabel}>Tracking type</Text>
+        <View style={styles.filters}>
+          <FilterChip
+            label="Weight & Reps"
+            active={exerciseType === 'Weight & Reps'}
+            onPress={() => setExerciseType('Weight & Reps')}
           />
-          <FormField
-            label="Equipment"
-            value={equipment}
-            onChangeText={setEquipment}
-            placeholder="Cable"
+          <FilterChip
+            label="Bodyweight"
+            active={exerciseType === 'Bodyweight'}
+            onPress={() => setExerciseType('Bodyweight')}
           />
+        </View>
+      </View>
 
-          <View style={styles.fieldGroup}>
-            <Text style={styles.fieldLabel}>Tracking type</Text>
-            <View style={styles.filters}>
-              <FilterChip
-                label="Weight & Reps"
-                active={exerciseType === 'Weight & Reps'}
-                onPress={() => setExerciseType('Weight & Reps')}
-              />
-              <FilterChip
-                label="Bodyweight"
-                active={exerciseType === 'Bodyweight'}
-                onPress={() => setExerciseType('Bodyweight')}
-              />
-            </View>
-          </View>
+      {exerciseType === 'Weight & Reps' ? (
+        <FormField
+          label="Default weight (optional)"
+          value={defaultWeight}
+          onChangeText={setDefaultWeight}
+          placeholder="25"
+          keyboardType="decimal-pad"
+        />
+      ) : null}
+      <FormField
+        label="Default reps"
+        value={defaultReps}
+        onChangeText={setDefaultReps}
+        placeholder="8"
+        keyboardType="number-pad"
+      />
 
-          {exerciseType === 'Weight & Reps' ? (
-            <FormField
-              label="Default weight (optional)"
-              value={defaultWeight}
-              onChangeText={setDefaultWeight}
-              placeholder="25"
-              keyboardType="decimal-pad"
-            />
-          ) : null}
-          <FormField
-            label="Default reps"
-            value={defaultReps}
-            onChangeText={setDefaultReps}
-            placeholder="8"
-            keyboardType="number-pad"
-          />
-
-          <PrimaryButton label="Create Exercise" onPress={submit} />
-          <PrimaryButton label="Cancel" onPress={closeAndReset} variant="secondary" />
-        </ScrollView>
-      </KeyboardAvoidingView>
-    </Modal>
+      <PrimaryButton label="Create Exercise" onPress={submit} />
+      <PrimaryButton label="Cancel" onPress={closeAndReset} variant="secondary" />
+    </KeyboardAwareModal>
   );
 }
 
@@ -457,6 +457,12 @@ function FormField({
         placeholder={placeholder}
         placeholderTextColor={colors.textMuted}
         keyboardType={keyboardType}
+        inputAccessoryViewID={
+          keyboardType === 'decimal-pad' || keyboardType === 'number-pad'
+            ? NUMERIC_KEYBOARD_ACCESSORY_ID
+            : undefined
+        }
+        returnKeyType={keyboardType === 'default' ? 'next' : 'done'}
         style={styles.formInput}
       />
     </View>
@@ -571,12 +577,8 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
     gap: spacing.md,
   },
-  formScroll: {
-    width: '100%',
-    maxHeight: '92%',
-  },
-  formModal: {
-    paddingBottom: spacing.xl,
+  formModalCard: {
+    maxWidth: 480,
   },
   modalTitle: {
     color: colors.text,
