@@ -1,6 +1,7 @@
 import { useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import {
+  Alert,
   Modal,
   Pressable,
   ScrollView,
@@ -18,22 +19,31 @@ import {
 import { PrimaryButton } from '@/components/PrimaryButton';
 import { ExerciseDefinition } from '@/constants/exercises';
 import { colors, radius, spacing } from '@/constants/theme';
-import { useActiveWorkout, WorkoutExercise } from '@/context/ActiveWorkoutContext';
+import {
+  EffortMode,
+  useActiveWorkout,
+  WorkoutExercise,
+  WorkoutSet,
+  WorkoutSetType,
+} from '@/context/ActiveWorkoutContext';
 
 type DialogType = 'finish' | 'discard' | null;
+type SetMenuState = { exerciseId: string; setId: string } | null;
+
+const SET_TYPES: Array<{ value: WorkoutSetType; label: string }> = [
+  { value: 'normal', label: 'Working' },
+  { value: 'warmup', label: 'Warm-up' },
+  { value: 'drop', label: 'Drop' },
+  { value: 'failure', label: 'Failure' },
+  { value: 'amrap', label: 'AMRAP' },
+];
 
 function formatDuration(totalSeconds: number) {
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
-
-  if (hours > 0) {
-    return `${hours}:${minutes.toString().padStart(2, '0')}:${seconds
-      .toString()
-      .padStart(2, '0')}`;
-  }
-
-  return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  if (hours > 0) return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
 export default function ActiveWorkoutScreen() {
@@ -44,22 +54,32 @@ export default function ActiveWorkoutScreen() {
     completedSetCount,
     totalSetCount,
     toggleSet,
-    toggleSetType,
+    setSetType,
     updateSetValue,
+    updateSetEffort,
     copyPreviousSet,
     addSet,
+    removeSet,
+    moveSet,
     addExercise,
     removeExercise,
+    moveExercise,
+    replaceExercise,
+    updateExerciseNotes,
     updateWorkoutNotes,
+    setRestTimer,
+    clearRestTimer,
     finishWorkout,
     discardWorkout,
     persistenceStatus,
   } = useActiveWorkout();
+
   const [now, setNow] = useState(Date.now());
-  const [restSeconds, setRestSeconds] = useState(0);
   const [dialog, setDialog] = useState<DialogType>(null);
   const [exercisePickerOpen, setExercisePickerOpen] = useState(false);
   const [exerciseMenuId, setExerciseMenuId] = useState<string | null>(null);
+  const [replaceExerciseId, setReplaceExerciseId] = useState<string | null>(null);
+  const [setMenu, setSetMenu] = useState<SetMenuState>(null);
 
   const availableExercises = useMemo(
     () => exercises.filter((exercise) => !exercise.archived),
@@ -67,22 +87,24 @@ export default function ActiveWorkoutScreen() {
   );
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      setNow(Date.now());
-      setRestSeconds((current) => Math.max(0, current - 1));
-    }, 1000);
-
+    const interval = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(interval);
   }, []);
 
-  const elapsed = useMemo(() => {
-    if (!workout) return 0;
-    return Math.max(0, Math.floor((now - workout.startedAt) / 1000));
-  }, [now, workout]);
+  const elapsed = workout
+    ? Math.max(0, Math.floor((now - workout.startedAt) / 1000))
+    : 0;
+  const restSeconds = workout?.restTimerEndsAt
+    ? Math.max(0, Math.ceil((workout.restTimerEndsAt - now) / 1000))
+    : 0;
 
-  const selectedExercise = workout?.exercises.find(
-    (exercise) => exercise.id === exerciseMenuId,
-  );
+  useEffect(() => {
+    if (workout?.restTimerEndsAt && restSeconds === 0) clearRestTimer();
+  }, [clearRestTimer, restSeconds, workout?.restTimerEndsAt]);
+
+  const selectedExercise = workout?.exercises.find((exercise) => exercise.id === exerciseMenuId) ?? null;
+  const selectedSetExercise = workout?.exercises.find((exercise) => exercise.id === setMenu?.exerciseId) ?? null;
+  const selectedSet = selectedSetExercise?.sets.find((set) => set.id === setMenu?.setId) ?? null;
 
   const closeWorkoutScreen = () => {
     setDialog(null);
@@ -114,31 +136,17 @@ export default function ActiveWorkoutScreen() {
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.topBar}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Close active workout screen"
-          onPress={() => router.back()}
-          hitSlop={12}
-        >
+        <Pressable accessibilityRole="button" accessibilityLabel="Close active workout screen" onPress={() => router.back()} hitSlop={12}>
           <Text style={styles.close}>⌄</Text>
         </Pressable>
-
         <Pressable
           accessibilityRole="button"
-          onPress={() => setRestSeconds(restSeconds > 0 ? 0 : 120)}
+          onPress={() => (restSeconds > 0 ? clearRestTimer() : setRestTimer(120))}
           style={({ pressed }) => [styles.restButton, pressed && styles.pressed]}
         >
-          <Text style={styles.restText}>
-            {restSeconds > 0 ? `Rest ${formatDuration(restSeconds)}` : 'Rest Timer'}
-          </Text>
+          <Text style={styles.restText}>{restSeconds > 0 ? `Rest ${formatDuration(restSeconds)}` : 'Rest Timer'}</Text>
         </Pressable>
-
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Finish workout"
-          onPress={() => setDialog('finish')}
-          hitSlop={12}
-        >
+        <Pressable accessibilityRole="button" accessibilityLabel="Finish workout" onPress={() => setDialog('finish')} hitSlop={12}>
           <Text style={styles.finish}>Finish</Text>
         </Pressable>
       </View>
@@ -163,61 +171,42 @@ export default function ActiveWorkoutScreen() {
             style={styles.workoutNotes}
           />
           <Text style={[styles.saveStatus, persistenceStatus === 'error' && styles.saveStatusError]}>
-            {persistenceStatus === 'saving'
-              ? '↻ Saving on this device…'
-              : persistenceStatus === 'error'
-                ? '! Local save issue'
-                : '✓ Saved on this device'}
+            {persistenceStatus === 'saving' ? '↻ Saving on this device…' : persistenceStatus === 'error' ? '! Local save issue' : '✓ Saved on this device'}
           </Text>
-          {workout.sourceTemplateId ? (
-            <Text style={styles.templateHint}>
-              Edit today’s values freely. When you finish, LiftFlow will ask whether to save them back to the template.
-            </Text>
-          ) : null}
         </View>
 
         {workout.exercises.length === 0 ? (
           <View style={styles.emptyCard}>
             <Text style={styles.emptyTitle}>No exercises yet</Text>
-            <Text style={styles.muted}>
-              Add an exercise from the LiftFlow library to begin logging sets.
-            </Text>
+            <Text style={styles.muted}>Add an exercise to begin recording sets.</Text>
             <PrimaryButton label="Add Exercises" onPress={() => setExercisePickerOpen(true)} />
           </View>
         ) : (
-          workout.exercises.map((exercise) => (
+          workout.exercises.map((exercise, exerciseIndex) => (
             <ExerciseCard
               key={exercise.id}
               exercise={exercise}
               onToggle={(setId) => {
                 const set = exercise.sets.find((item) => item.id === setId);
                 toggleSet(exercise.id, setId);
-                if (set && !set.completed) setRestSeconds(120);
+                if (set && !set.completed) setRestTimer(120);
               }}
-              onToggleSetType={(setId) => toggleSetType(exercise.id, setId)}
-              onUpdateValue={(setId, field, value) =>
-                updateSetValue(exercise.id, setId, field, value)
-              }
+              onUpdateValue={(setId, field, value) => updateSetValue(exercise.id, setId, field, value)}
               onCopyPrevious={(setId) => copyPreviousSet(exercise.id, setId)}
               onAddSet={() => addSet(exercise.id)}
+              onOpenSet={(setId) => setSetMenu({ exerciseId: exercise.id, setId })}
               onOpenMenu={() => setExerciseMenuId(exercise.id)}
+              onUpdateNotes={(notes) => updateExerciseNotes(exercise.id, notes)}
+              canMoveUp={exerciseIndex > 0}
+              canMoveDown={exerciseIndex < workout.exercises.length - 1}
             />
           ))
         )}
 
         {workout.exercises.length > 0 ? (
-          <PrimaryButton
-            label="+ Add Exercises"
-            onPress={() => setExercisePickerOpen(true)}
-            variant="secondary"
-          />
+          <PrimaryButton label="+ Add Exercises" onPress={() => setExercisePickerOpen(true)} variant="secondary" />
         ) : null}
-
-        <PrimaryButton
-          label="Discard Workout"
-          onPress={() => setDialog('discard')}
-          variant="danger"
-        />
+        <PrimaryButton label="Discard Workout" onPress={() => setDialog('discard')} variant="danger" />
       </ScrollView>
 
       <WorkoutDialog
@@ -231,19 +220,65 @@ export default function ActiveWorkoutScreen() {
       />
 
       <ExercisePickerModal
+        title="Add Exercises"
         exercises={availableExercises}
         visible={exercisePickerOpen}
-        addedExerciseNames={workout.exercises.map((exercise) => exercise.name)}
+        disabledNames={workout.exercises.map((exercise) => exercise.name)}
         onClose={() => setExercisePickerOpen(false)}
-        onAdd={addExercise}
+        onSelect={addExercise}
+      />
+
+      <ExercisePickerModal
+        title="Replace Exercise"
+        exercises={availableExercises}
+        visible={Boolean(replaceExerciseId)}
+        disabledNames={workout.exercises.filter((item) => item.id !== replaceExerciseId).map((item) => item.name)}
+        onClose={() => setReplaceExerciseId(null)}
+        onSelect={(definitionId) => {
+          if (replaceExerciseId) replaceExercise(replaceExerciseId, definitionId);
+          setReplaceExerciseId(null);
+        }}
       />
 
       <ExerciseActionsModal
-        exercise={selectedExercise ?? null}
+        exercise={selectedExercise}
+        canMoveUp={selectedExercise ? workout.exercises.findIndex((item) => item.id === selectedExercise.id) > 0 : false}
+        canMoveDown={selectedExercise ? workout.exercises.findIndex((item) => item.id === selectedExercise.id) < workout.exercises.length - 1 : false}
         onClose={() => setExerciseMenuId(null)}
-        onRemove={() => {
-          if (selectedExercise) removeExercise(selectedExercise.id);
+        onMove={(direction) => {
+          if (selectedExercise) moveExercise(selectedExercise.id, direction);
           setExerciseMenuId(null);
+        }}
+        onReplace={() => {
+          if (selectedExercise) setReplaceExerciseId(selectedExercise.id);
+          setExerciseMenuId(null);
+        }}
+        onRemove={() => {
+          if (!selectedExercise) return;
+          Alert.alert('Remove exercise?', `${selectedExercise.name} will only be removed from this active workout.`, [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Remove', style: 'destructive', onPress: () => removeExercise(selectedExercise.id) },
+          ]);
+          setExerciseMenuId(null);
+        }}
+      />
+
+      <SetActionsModal
+        exercise={selectedSetExercise}
+        set={selectedSet}
+        onClose={() => setSetMenu(null)}
+        onSetType={(type) => {
+          if (setMenu) setSetType(setMenu.exerciseId, setMenu.setId, type);
+        }}
+        onEffort={(mode, value) => {
+          if (setMenu) updateSetEffort(setMenu.exerciseId, setMenu.setId, mode, value);
+        }}
+        onMove={(direction) => {
+          if (setMenu) moveSet(setMenu.exerciseId, setMenu.setId, direction);
+        }}
+        onDelete={() => {
+          if (setMenu) removeSet(setMenu.exerciseId, setMenu.setId);
+          setSetMenu(null);
         }}
       />
 
@@ -255,43 +290,44 @@ export default function ActiveWorkoutScreen() {
 function ExerciseCard({
   exercise,
   onToggle,
-  onToggleSetType,
   onUpdateValue,
   onCopyPrevious,
   onAddSet,
+  onOpenSet,
   onOpenMenu,
+  onUpdateNotes,
 }: {
   exercise: WorkoutExercise;
   onToggle: (setId: string) => void;
-  onToggleSetType: (setId: string) => void;
-  onUpdateValue: (
-    setId: string,
-    field: 'weight' | 'reps',
-    value: number | undefined,
-  ) => void;
+  onUpdateValue: (setId: string, field: 'weight' | 'reps', value: number | undefined) => void;
   onCopyPrevious: (setId: string) => void;
   onAddSet: () => void;
+  onOpenSet: (setId: string) => void;
   onOpenMenu: () => void;
+  onUpdateNotes: (notes: string) => void;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
 }) {
   return (
     <View style={styles.exerciseCard}>
       <View style={styles.exerciseHeader}>
         <View style={styles.exerciseHeaderCopy}>
           <Text style={styles.exerciseName}>{exercise.name}</Text>
-          <Text style={styles.exerciseNote}>
-            Tap Previous to copy it, or type today’s weight and reps. Tap the set label to mark a warm-up.
-          </Text>
+          <Text style={styles.exerciseNote}>Tap a set label for type, effort, move, and delete controls.</Text>
         </View>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Open ${exercise.name} actions`}
-          onPress={onOpenMenu}
-          hitSlop={12}
-          style={({ pressed }) => pressed && styles.pressed}
-        >
+        <Pressable accessibilityRole="button" accessibilityLabel={`Open ${exercise.name} actions`} onPress={onOpenMenu} hitSlop={12} style={({ pressed }) => pressed && styles.pressed}>
           <Text style={styles.menu}>•••</Text>
         </Pressable>
       </View>
+
+      <TextInput
+        value={exercise.notes ?? ''}
+        onChangeText={onUpdateNotes}
+        placeholder="Exercise notes"
+        placeholderTextColor={colors.textMuted}
+        multiline
+        style={styles.exerciseNotes}
+      />
 
       <View style={styles.tableHeader}>
         <Text style={[styles.columnLabel, styles.setColumn]}>SET</Text>
@@ -301,144 +337,51 @@ function ExerciseCard({
         <Text style={[styles.columnLabel, styles.doneColumn]}>✓</Text>
       </View>
 
-      {exercise.sets.map((set, index) => {
-        const setLabel = getSetLabel(exercise.sets, index);
-        const isWarmup = (set.setType ?? 'normal') === 'warmup';
-
-        return (
-        <View key={set.id}>
-          <View
-            style={[
-              styles.setRow,
-              isWarmup && styles.warmupSetRow,
-              set.completed && styles.completedRow,
-            ]}
-          >
+      {exercise.sets.map((set, index) => (
+        <View key={set.id} style={styles.setBlock}>
+          <View style={[styles.setRow, set.completed && styles.completedRow]}>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={`${isWarmup ? 'Warm-up' : `Working set ${setLabel}`}. Tap to switch set type.`}
-              onPress={() => onToggleSetType(set.id)}
-              style={({ pressed }) => [
-                styles.setColumn,
-                styles.activeSetTypeButton,
-                isWarmup && styles.activeWarmupSetTypeButton,
-                pressed && styles.pressed,
-              ]}
+              accessibilityLabel={`Open controls for ${setTypeLabel(set.setType)} set`}
+              onPress={() => onOpenSet(set.id)}
+              style={({ pressed }) => [styles.setTypeButton, styles.setColumn, pressed && styles.pressed]}
             >
-              <Text style={[styles.setNumber, isWarmup && styles.warmupSetNumber]}>
-                {setLabel}
-              </Text>
+              <Text style={[styles.setNumber, (set.setType ?? 'normal') !== 'normal' && styles.specialSetNumber]}>{getSetLabel(exercise.sets, index)}</Text>
             </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={`Copy previous values for ${isWarmup ? 'warm-up set' : `set ${setLabel}`}`}
-              onPress={() => onCopyPrevious(set.id)}
-              style={({ pressed }) => [
-                styles.previousColumn,
-                styles.previousButton,
-                pressed && styles.previousButtonPressed,
-              ]}
-            >
-              <Text style={styles.previousText}>
-                {set.previousWeight ?? '—'} × {set.previousReps ?? '—'}
-              </Text>
+            <Pressable onPress={() => onCopyPrevious(set.id)} style={({ pressed }) => [styles.previousButton, styles.previousColumn, pressed && styles.previousButtonPressed]}>
+              <Text style={styles.previousText}>{set.previousWeight ?? '—'} × {set.previousReps ?? '—'}</Text>
             </Pressable>
-            <SetValueInput
-              value={set.weight}
-              decimal
-              accessibilityLabel={`${exercise.name} set ${index + 1} weight`}
-              onCommit={(value) => onUpdateValue(set.id, 'weight', value)}
-            />
-            <SetValueInput
-              value={set.reps}
-              accessibilityLabel={`${exercise.name} set ${index + 1} reps`}
-              onCommit={(value) => onUpdateValue(set.id, 'reps', value)}
-            />
-            <Pressable
-              accessibilityRole="checkbox"
-              accessibilityState={{ checked: set.completed }}
-              onPress={() => onToggle(set.id)}
-              style={({ pressed }) => [
-                styles.checkButton,
-                styles.doneColumn,
-                set.completed && styles.checkButtonComplete,
-                pressed && styles.pressed,
-              ]}
-            >
-              <Text style={set.completed ? styles.checkComplete : styles.checkEmpty}>
-                {set.completed ? '✓' : ''}
-              </Text>
+            <SetValueInput value={set.weight} decimal accessibilityLabel={`${exercise.name} set ${index + 1} weight`} onCommit={(value) => onUpdateValue(set.id, 'weight', value)} />
+            <SetValueInput value={set.reps} accessibilityLabel={`${exercise.name} set ${index + 1} reps`} onCommit={(value) => onUpdateValue(set.id, 'reps', value)} />
+            <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: set.completed }} onPress={() => onToggle(set.id)} style={({ pressed }) => [styles.checkButton, styles.doneColumn, set.completed && styles.checkButtonComplete, pressed && styles.pressed]}>
+              <Text style={set.completed ? styles.checkComplete : styles.checkEmpty}>{set.completed ? '✓' : ''}</Text>
             </Pressable>
           </View>
-          {set.rpe !== undefined || set.rir !== undefined ? (
-            <View style={styles.effortTargetRow}>
-              <Text style={styles.effortTargetLabel}>
-                Target: {set.rpe !== undefined ? `RPE ${set.rpe}` : `RIR ${set.rir}`}
-              </Text>
-            </View>
-          ) : null}
+          <Pressable onPress={() => onOpenSet(set.id)} style={({ pressed }) => [styles.setMetaRow, pressed && styles.pressed]}>
+            <Text style={styles.setMetaText}>{setTypeLabel(set.setType)}</Text>
+            <Text style={styles.setMetaText}>{formatEffort(set)}</Text>
+          </Pressable>
         </View>
-        );
-      })}
+      ))}
 
-      <Pressable
-        accessibilityRole="button"
-        onPress={onAddSet}
-        style={({ pressed }) => [styles.addSetButton, pressed && styles.pressed]}
-      >
+      <Pressable accessibilityRole="button" onPress={onAddSet} style={({ pressed }) => [styles.addSetButton, pressed && styles.pressed]}>
         <Text style={styles.addSetLabel}>+ Add Set</Text>
       </Pressable>
     </View>
   );
 }
 
-function getSetLabel(sets: WorkoutExercise['sets'], index: number) {
-  const set = sets[index];
-  if ((set.setType ?? 'normal') === 'warmup') return 'W';
-
-  return String(
-    sets
-      .slice(0, index + 1)
-      .filter((candidate) => (candidate.setType ?? 'normal') === 'normal').length,
-  );
-}
-
-function SetValueInput({
-  value,
-  decimal = false,
-  accessibilityLabel,
-  onCommit,
-}: {
-  value?: number;
-  decimal?: boolean;
-  accessibilityLabel: string;
-  onCommit: (value: number | undefined) => void;
-}) {
+function SetValueInput({ value, decimal = false, accessibilityLabel, onCommit }: { value?: number; decimal?: boolean; accessibilityLabel: string; onCommit: (value: number | undefined) => void }) {
   const [text, setText] = useState(value === undefined ? '' : String(value));
-
-  useEffect(() => {
-    setText(value === undefined ? '' : String(value));
-  }, [value]);
-
+  useEffect(() => setText(value === undefined ? '' : String(value)), [value]);
   const commit = () => {
     const normalized = text.trim().replace(',', '.');
-
-    if (!normalized) {
-      onCommit(undefined);
-      return;
-    }
-
+    if (!normalized) return onCommit(undefined);
     const parsed = decimal ? Number.parseFloat(normalized) : Number.parseInt(normalized, 10);
-
-    if (!Number.isFinite(parsed) || parsed < 0) {
-      setText(value === undefined ? '' : String(value));
-      return;
-    }
-
+    if (!Number.isFinite(parsed) || parsed < 0) return setText(value === undefined ? '' : String(value));
     onCommit(parsed);
     setText(String(parsed));
   };
-
   return (
     <View style={[styles.valueBox, styles.valueColumn]}>
       <TextInput
@@ -460,54 +403,26 @@ function SetValueInput({
   );
 }
 
-function ExercisePickerModal({
-  exercises,
-  visible,
-  addedExerciseNames,
-  onClose,
-  onAdd,
-}: {
-  exercises: ExerciseDefinition[];
-  visible: boolean;
-  addedExerciseNames: string[];
-  onClose: () => void;
-  onAdd: (exerciseId: string) => void;
-}) {
+function ExercisePickerModal({ title, exercises, visible, disabledNames, onClose, onSelect }: { title: string; exercises: ExerciseDefinition[]; visible: boolean; disabledNames: string[]; onClose: () => void; onSelect: (exerciseId: string) => void }) {
   return (
     <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
       <View style={styles.modalBackdrop}>
         <View style={styles.modalCardLarge}>
-          <Text style={styles.modalTitle}>Add Exercises</Text>
-          <Text style={styles.modalBody}>Tap an exercise to add it to this workout.</Text>
-
+          <Text style={styles.modalTitle}>{title}</Text>
           <ScrollView style={styles.exercisePickerList}>
             {exercises.map((exercise) => {
-              const added = addedExerciseNames.includes(exercise.name);
+              const disabled = disabledNames.includes(exercise.name);
               return (
-                <Pressable
-                  key={exercise.id}
-                  accessibilityRole="button"
-                  accessibilityState={{ disabled: added }}
-                  disabled={added}
-                  onPress={() => onAdd(exercise.id)}
-                  style={({ pressed }) => [
-                    styles.pickerRow,
-                    added && styles.pickerRowAdded,
-                    pressed && styles.pressed,
-                  ]}
-                >
+                <Pressable key={exercise.id} disabled={disabled} onPress={() => onSelect(exercise.id)} style={({ pressed }) => [styles.pickerRow, disabled && styles.pickerRowAdded, pressed && styles.pressed]}>
                   <View style={styles.pickerCopy}>
                     <Text style={styles.pickerName}>{exercise.name}</Text>
                     <Text style={styles.pickerDetail}>{exercise.detail}</Text>
                   </View>
-                  <Text style={added ? styles.addedLabel : styles.addLabel}>
-                    {added ? 'Added' : '+ Add'}
-                  </Text>
+                  <Text style={disabled ? styles.addedLabel : styles.addLabel}>{disabled ? 'In workout' : 'Select'}</Text>
                 </Pressable>
               );
             })}
           </ScrollView>
-
           <PrimaryButton label="Done" onPress={onClose} variant="secondary" />
         </View>
       </View>
@@ -515,30 +430,19 @@ function ExercisePickerModal({
   );
 }
 
-function ExerciseActionsModal({
-  exercise,
-  onClose,
-  onRemove,
-}: {
-  exercise: WorkoutExercise | null;
-  onClose: () => void;
-  onRemove: () => void;
-}) {
+function ExerciseActionsModal({ exercise, canMoveUp, canMoveDown, onClose, onMove, onReplace, onRemove }: { exercise: WorkoutExercise | null; canMoveUp: boolean; canMoveDown: boolean; onClose: () => void; onMove: (direction: 'up' | 'down') => void; onReplace: () => void; onRemove: () => void }) {
   return (
-    <Modal
-      transparent
-      visible={Boolean(exercise)}
-      animationType="fade"
-      onRequestClose={onClose}
-    >
+    <Modal transparent visible={Boolean(exercise)} animationType="fade" onRequestClose={onClose}>
       <View style={styles.modalBackdrop}>
         <View style={styles.modalCard}>
           {exercise ? (
             <>
               <Text style={styles.modalTitle}>{exercise.name}</Text>
-              <Text style={styles.modalBody}>
-                Exercise actions are intentionally limited in this foundation batch.
-              </Text>
+              <View style={styles.horizontalButtons}>
+                <SmallAction label="Move Up" disabled={!canMoveUp} onPress={() => onMove('up')} />
+                <SmallAction label="Move Down" disabled={!canMoveDown} onPress={() => onMove('down')} />
+              </View>
+              <PrimaryButton label="Replace Exercise" onPress={onReplace} variant="secondary" />
               <PrimaryButton label="Remove Exercise" onPress={onRemove} variant="danger" />
               <PrimaryButton label="Cancel" onPress={onClose} variant="secondary" />
             </>
@@ -549,69 +453,101 @@ function ExerciseActionsModal({
   );
 }
 
-function WorkoutDialog({
-  type,
-  completedSetCount,
-  totalSetCount,
-  canUpdateTemplate,
-  onCancel,
-  onDiscard,
-  onFinish,
-}: {
-  type: DialogType;
-  completedSetCount: number;
-  totalSetCount: number;
-  canUpdateTemplate: boolean;
-  onCancel: () => void;
-  onDiscard: () => void;
-  onFinish: (updateTemplate: boolean) => void;
-}) {
+function SetActionsModal({ exercise, set, onClose, onSetType, onEffort, onMove, onDelete }: { exercise: WorkoutExercise | null; set: WorkoutSet | null; onClose: () => void; onSetType: (type: WorkoutSetType) => void; onEffort: (mode: EffortMode | null, value?: number) => void; onMove: (direction: 'up' | 'down') => void; onDelete: () => void }) {
+  const [effortMode, setEffortMode] = useState<EffortMode | null>(null);
+  const [effortText, setEffortText] = useState('');
+  useEffect(() => {
+    if (set?.rpe !== undefined) { setEffortMode('rpe'); setEffortText(String(set.rpe)); }
+    else if (set?.rir !== undefined) { setEffortMode('rir'); setEffortText(String(set.rir)); }
+    else { setEffortMode(null); setEffortText(''); }
+  }, [set]);
+  const commitEffort = () => {
+    if (!effortMode || !effortText.trim()) { onEffort(null); return; }
+    const value = Number.parseFloat(effortText.replace(',', '.'));
+    if (Number.isFinite(value)) onEffort(effortMode, value);
+  };
+  const index = exercise && set ? exercise.sets.findIndex((item) => item.id === set.id) : -1;
   return (
-    <Modal
-      transparent
-      visible={type !== null}
-      animationType="fade"
-      onRequestClose={onCancel}
-    >
+    <Modal transparent visible={Boolean(exercise && set)} animationType="fade" onRequestClose={onClose}>
+      <View style={styles.modalBackdrop}>
+        <View style={styles.modalCardLarge}>
+          {exercise && set ? (
+            <ScrollView keyboardShouldPersistTaps="handled">
+              <Text style={styles.modalTitle}>Set Controls</Text>
+              <Text style={styles.modalBody}>{exercise.name}</Text>
+              <Text style={styles.controlLabel}>Set type</Text>
+              <View style={styles.chipWrap}>
+                {SET_TYPES.map((option) => (
+                  <Pressable key={option.value} onPress={() => onSetType(option.value)} style={[styles.chip, (set.setType ?? 'normal') === option.value && styles.chipActive]}>
+                    <Text style={(set.setType ?? 'normal') === option.value ? styles.chipTextActive : styles.chipText}>{option.label}</Text>
+                  </Pressable>
+                ))}
+              </View>
+              <Text style={styles.controlLabel}>Effort</Text>
+              <View style={styles.horizontalButtons}>
+                <SmallAction label="None" active={effortMode === null} onPress={() => { setEffortMode(null); setEffortText(''); onEffort(null); }} />
+                <SmallAction label="RPE" active={effortMode === 'rpe'} onPress={() => setEffortMode('rpe')} />
+                <SmallAction label="RIR" active={effortMode === 'rir'} onPress={() => setEffortMode('rir')} />
+              </View>
+              {effortMode ? (
+                <TextInput
+                  value={effortText}
+                  onChangeText={setEffortText}
+                  onBlur={commitEffort}
+                  onSubmitEditing={commitEffort}
+                  keyboardType="decimal-pad"
+                  inputAccessoryViewID={NUMERIC_KEYBOARD_ACCESSORY_ID}
+                  placeholder={effortMode === 'rpe' ? '0–10 RPE' : 'Reps in reserve'}
+                  placeholderTextColor={colors.textMuted}
+                  style={styles.effortInput}
+                />
+              ) : null}
+              <View style={styles.horizontalButtons}>
+                <SmallAction label="Move Up" disabled={index <= 0} onPress={() => onMove('up')} />
+                <SmallAction label="Move Down" disabled={index < 0 || index >= exercise.sets.length - 1} onPress={() => onMove('down')} />
+              </View>
+              <PrimaryButton label="Delete Set" onPress={onDelete} variant="danger" />
+              <PrimaryButton label="Done" onPress={() => { commitEffort(); onClose(); }} variant="secondary" />
+            </ScrollView>
+          ) : null}
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function SmallAction({ label, onPress, disabled = false, active = false }: { label: string; onPress: () => void; disabled?: boolean; active?: boolean }) {
+  return (
+    <Pressable disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.smallAction, active && styles.smallActionActive, disabled && styles.disabled, pressed && styles.pressed]}>
+      <Text style={[styles.smallActionText, active && styles.smallActionTextActive]}>{label}</Text>
+    </Pressable>
+  );
+}
+
+function WorkoutDialog({ type, completedSetCount, totalSetCount, canUpdateTemplate, onCancel, onDiscard, onFinish }: { type: DialogType; completedSetCount: number; totalSetCount: number; canUpdateTemplate: boolean; onCancel: () => void; onDiscard: () => void; onFinish: (updateTemplate: boolean) => void }) {
+  return (
+    <Modal transparent visible={type !== null} animationType="fade" onRequestClose={onCancel}>
       <View style={styles.modalBackdrop}>
         <View style={styles.modalCard}>
           {type === 'discard' ? (
             <>
               <Text style={styles.modalTitle}>Discard workout?</Text>
-              <Text style={styles.modalBody}>
-                This active workout will be removed. Your saved templates will stay unchanged.
-              </Text>
-              <View style={styles.modalButtons}>
-                <PrimaryButton label="Cancel" onPress={onCancel} variant="secondary" />
-                <PrimaryButton label="Discard Workout" onPress={onDiscard} variant="danger" />
-              </View>
+              <Text style={styles.modalBody}>This active workout will be removed. Saved templates stay unchanged.</Text>
+              <PrimaryButton label="Cancel" onPress={onCancel} variant="secondary" />
+              <PrimaryButton label="Discard Workout" onPress={onDiscard} variant="danger" />
             </>
           ) : null}
-
           {type === 'finish' ? (
             <>
               <Text style={styles.modalTitle}>Finish workout?</Text>
-              <Text style={styles.modalBody}>
-                {completedSetCount} of {totalSetCount} sets are complete.
-              </Text>
-              <View style={styles.modalButtons}>
-                <PrimaryButton label="Continue Workout" onPress={onCancel} variant="secondary" />
-                {canUpdateTemplate ? (
-                  <>
-                    <PrimaryButton
-                      label="Finish Without Updating Template"
-                      onPress={() => onFinish(false)}
-                      variant="secondary"
-                    />
-                    <PrimaryButton
-                      label="Finish & Update Template"
-                      onPress={() => onFinish(true)}
-                    />
-                  </>
-                ) : (
-                  <PrimaryButton label="Finish Workout" onPress={() => onFinish(false)} />
-                )}
-              </View>
+              <Text style={styles.modalBody}>{completedSetCount} of {totalSetCount} sets are complete.</Text>
+              <PrimaryButton label="Continue Workout" onPress={onCancel} variant="secondary" />
+              {canUpdateTemplate ? (
+                <>
+                  <PrimaryButton label="Finish Without Updating Template" onPress={() => onFinish(false)} variant="secondary" />
+                  <PrimaryButton label="Finish & Update Template" onPress={() => onFinish(true)} />
+                </>
+              ) : <PrimaryButton label="Finish Workout" onPress={() => onFinish(false)} />}
             </>
           ) : null}
         </View>
@@ -620,351 +556,100 @@ function WorkoutDialog({
   );
 }
 
-const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-  topBar: {
-    minHeight: 56,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing.md,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
-  },
-  close: {
-    color: colors.text,
-    fontSize: 30,
-    fontWeight: '700',
-  },
-  restButton: {
-    backgroundColor: colors.surfaceElevated,
-    borderRadius: radius.pill,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-  },
-  restText: {
-    color: colors.primary,
-    fontSize: 13,
-    fontWeight: '800',
-  },
-  finish: {
-    color: colors.primary,
-    fontSize: 16,
-    fontWeight: '900',
-  },
-  pressed: {
-    opacity: 0.65,
-  },
-  content: {
-    padding: spacing.md,
-    paddingBottom: spacing.xl,
-    gap: spacing.md,
-  },
-  workoutHeader: {
-    gap: 4,
-  },
-  workoutName: {
-    color: colors.text,
-    fontSize: 30,
-    fontWeight: '900',
-  },
-  elapsed: {
-    color: colors.text,
-    fontSize: 17,
-    fontWeight: '700',
-  },
-  muted: {
-    color: colors.textMuted,
-    fontSize: 14,
-    lineHeight: 20,
-  },
-  workoutNotes: {
-    minHeight: 48,
-    maxHeight: 110,
-    color: colors.text,
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderWidth: 1,
-    borderRadius: radius.md,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    fontSize: 14,
-    marginTop: spacing.sm,
-  },
-  saveStatus: {
-    color: colors.primary,
-    fontSize: 12,
-    fontWeight: '700',
-    marginTop: 5,
-  },
-  saveStatusError: {
-    color: colors.danger,
-  },
-  templateHint: {
-    color: colors.warning,
-    fontSize: 12,
-    lineHeight: 18,
-    marginTop: 5,
-  },
-  emptyCard: {
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderWidth: 1,
-    borderRadius: radius.lg,
-    padding: spacing.lg,
-    gap: spacing.md,
-  },
-  noWorkout: {
-    flex: 1,
-    justifyContent: 'center',
-    padding: spacing.lg,
-    gap: spacing.md,
-  },
-  emptyTitle: {
-    color: colors.text,
-    fontSize: 21,
-    fontWeight: '900',
-  },
-  exerciseCard: {
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderWidth: 1,
-    borderRadius: radius.lg,
-    padding: spacing.md,
-  },
-  exerciseHeader: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    marginBottom: spacing.md,
-  },
-  exerciseHeaderCopy: {
-    flex: 1,
-    paddingRight: spacing.sm,
-  },
-  exerciseName: {
-    color: colors.text,
-    fontSize: 20,
-    fontWeight: '900',
-  },
-  exerciseNote: {
-    color: colors.textMuted,
-    fontSize: 12,
-    marginTop: 4,
-  },
-  menu: {
-    color: colors.textMuted,
-    fontSize: 18,
-    letterSpacing: 2,
-  },
-  tableHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 5,
-  },
-  columnLabel: {
-    color: colors.textMuted,
-    fontSize: 10,
-    fontWeight: '900',
-    textAlign: 'center',
-  },
-  setColumn: {
-    width: 36,
-  },
-  previousColumn: {
-    flex: 1.2,
-  },
-  valueColumn: {
-    flex: 0.8,
-    marginHorizontal: 3,
-  },
-  doneColumn: {
-    width: 38,
-  },
-  setRow: {
-    minHeight: 52,
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.border,
-  },
-  completedRow: {
-    opacity: 0.75,
-  },
-  setNumber: {
-    color: colors.text,
-    textAlign: 'center',
-    fontWeight: '800',
-  },
-  activeSetTypeButton: {
-    minHeight: 38,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: radius.sm,
-  },
-  activeWarmupSetTypeButton: {
-    backgroundColor: colors.surfaceElevated,
-    borderColor: colors.primary,
-    borderWidth: 1,
-  },
-  warmupSetRow: {
-    backgroundColor: 'rgba(98, 216, 139, 0.05)',
-  },
-  warmupSetNumber: {
-    color: colors.primary,
-  },
-  previousButton: {
-    minHeight: 36,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: radius.sm,
-  },
-  previousButtonPressed: {
-    backgroundColor: colors.surfaceElevated,
-  },
-  previousText: {
-    color: colors.textMuted,
-    textAlign: 'center',
-    fontSize: 13,
-  },
-  valueBox: {
-    minHeight: 38,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.surfaceElevated,
-    borderRadius: radius.sm,
-  },
-  valueInput: {
-    width: '100%',
-    minHeight: 38,
-    paddingHorizontal: 6,
-    paddingVertical: 0,
-    color: colors.text,
-    fontSize: 15,
-    fontWeight: '800',
-    textAlign: 'center',
-  },
-  checkButton: {
-    height: 32,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderColor: colors.border,
-    borderWidth: 1,
-    borderRadius: 8,
-  },
-  checkButtonComplete: {
-    backgroundColor: colors.primary,
-    borderColor: colors.primary,
-  },
-  checkEmpty: {
-    color: colors.textMuted,
-  },
-  checkComplete: {
-    color: colors.background,
-    fontSize: 18,
-    fontWeight: '900',
-  },
-  addSetButton: {
-    minHeight: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: spacing.sm,
-  },
-  addSetLabel: {
-    color: colors.primary,
-    fontSize: 15,
-    fontWeight: '800',
-  },
-  modalBackdrop: {
-    flex: 1,
-    justifyContent: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.72)',
-    padding: spacing.lg,
-  },
-  modalCard: {
-    width: '100%',
-    maxWidth: 480,
-    alignSelf: 'center',
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderWidth: 1,
-    borderRadius: radius.lg,
-    padding: spacing.lg,
-    gap: spacing.md,
-  },
-  modalCardLarge: {
-    width: '100%',
-    maxWidth: 520,
-    maxHeight: '85%',
-    alignSelf: 'center',
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderWidth: 1,
-    borderRadius: radius.lg,
-    padding: spacing.lg,
-    gap: spacing.md,
-  },
-  modalTitle: {
-    color: colors.text,
-    fontSize: 24,
-    fontWeight: '900',
-  },
-  modalBody: {
-    color: colors.textMuted,
-    fontSize: 15,
-    lineHeight: 22,
-  },
-  modalButtons: {
-    gap: spacing.sm,
-  },
-  exercisePickerList: {
-    maxHeight: 430,
-  },
-  pickerRow: {
-    minHeight: 60,
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderTopColor: colors.border,
-    borderTopWidth: StyleSheet.hairlineWidth,
-  },
-  pickerRowAdded: {
-    opacity: 0.48,
-  },
-  pickerCopy: {
-    flex: 1,
-  },
-  pickerName: {
-    color: colors.text,
-    fontSize: 15,
-    fontWeight: '800',
-  },
-  pickerDetail: {
-    color: colors.textMuted,
-    fontSize: 12,
-    marginTop: 3,
-  },
-  addLabel: {
-    color: colors.primary,
-    fontSize: 13,
-    fontWeight: '900',
-  },
-  addedLabel: {
-    color: colors.textMuted,
-    fontSize: 13,
-    fontWeight: '800',
-  },
-  effortTargetRow: {
-    alignItems: 'flex-end',
-    paddingRight: 44,
-    paddingBottom: 5,
-  },
-  effortTargetLabel: {
-    color: colors.primary,
-    fontSize: 10,
-    fontWeight: '800',
-  },
+function getSetLabel(sets: WorkoutSet[], index: number) {
+  const type = sets[index].setType ?? 'normal';
+  if (type === 'warmup') return 'W';
+  if (type === 'drop') return 'D';
+  if (type === 'failure') return 'F';
+  if (type === 'amrap') return 'A';
+  return String(sets.slice(0, index + 1).filter((set) => (set.setType ?? 'normal') === 'normal').length);
+}
 
+function setTypeLabel(type: WorkoutSetType | undefined) {
+  return SET_TYPES.find((item) => item.value === (type ?? 'normal'))?.label ?? 'Working';
+}
+
+function formatEffort(set: WorkoutSet) {
+  if (set.rpe !== undefined) return `RPE ${set.rpe}`;
+  if (set.rir !== undefined) return `RIR ${set.rir}`;
+  return 'No effort recorded';
+}
+
+const styles = StyleSheet.create({
+  safeArea: { flex: 1, backgroundColor: colors.background },
+  topBar: { minHeight: 56, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.md, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+  close: { color: colors.text, fontSize: 30, fontWeight: '700' },
+  restButton: { backgroundColor: colors.surfaceElevated, borderRadius: radius.pill, paddingHorizontal: 14, paddingVertical: 8 },
+  restText: { color: colors.primary, fontSize: 13, fontWeight: '800' },
+  finish: { color: colors.primary, fontSize: 16, fontWeight: '900' },
+  pressed: { opacity: 0.65 },
+  disabled: { opacity: 0.35 },
+  content: { padding: spacing.md, paddingBottom: spacing.xl, gap: spacing.md },
+  workoutHeader: { gap: 4 },
+  workoutName: { color: colors.text, fontSize: 30, fontWeight: '900' },
+  elapsed: { color: colors.text, fontSize: 17, fontWeight: '700' },
+  muted: { color: colors.textMuted, fontSize: 14, lineHeight: 20 },
+  workoutNotes: { minHeight: 48, maxHeight: 110, color: colors.text, backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1, borderRadius: radius.md, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, fontSize: 14, marginTop: spacing.sm },
+  saveStatus: { color: colors.primary, fontSize: 12, fontWeight: '700', marginTop: 5 },
+  saveStatusError: { color: colors.danger },
+  emptyCard: { backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1, borderRadius: radius.lg, padding: spacing.lg, gap: spacing.md },
+  noWorkout: { flex: 1, justifyContent: 'center', padding: spacing.lg, gap: spacing.md },
+  emptyTitle: { color: colors.text, fontSize: 21, fontWeight: '900' },
+  exerciseCard: { backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1, borderRadius: radius.lg, padding: spacing.md },
+  exerciseHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: spacing.sm },
+  exerciseHeaderCopy: { flex: 1, paddingRight: spacing.sm },
+  exerciseName: { color: colors.text, fontSize: 20, fontWeight: '900' },
+  exerciseNote: { color: colors.textMuted, fontSize: 12, marginTop: 4 },
+  exerciseNotes: { minHeight: 42, color: colors.text, backgroundColor: colors.surfaceElevated, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, paddingHorizontal: spacing.sm, paddingVertical: 8, marginBottom: spacing.sm },
+  menu: { color: colors.textMuted, fontSize: 18, fontWeight: '900' },
+  tableHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
+  columnLabel: { color: colors.textMuted, fontSize: 10, fontWeight: '900', textAlign: 'center' },
+  setColumn: { width: 42 },
+  previousColumn: { flex: 1.3 },
+  valueColumn: { flex: 1 },
+  doneColumn: { width: 42 },
+  setBlock: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
+  setRow: { minHeight: 54, flexDirection: 'row', alignItems: 'center', gap: 5 },
+  completedRow: { backgroundColor: 'rgba(91, 217, 137, 0.08)' },
+  setTypeButton: { alignItems: 'center', justifyContent: 'center', minHeight: 38, borderRadius: radius.sm, backgroundColor: colors.surfaceElevated },
+  setNumber: { color: colors.text, fontSize: 15, fontWeight: '900' },
+  specialSetNumber: { color: colors.primary },
+  previousButton: { minHeight: 38, alignItems: 'center', justifyContent: 'center', borderRadius: radius.sm },
+  previousButtonPressed: { backgroundColor: colors.surfaceElevated },
+  previousText: { color: colors.textMuted, fontSize: 12, fontWeight: '700' },
+  valueBox: { minHeight: 38, backgroundColor: colors.surfaceElevated, borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, justifyContent: 'center' },
+  valueInput: { color: colors.text, fontSize: 15, fontWeight: '800', textAlign: 'center', paddingVertical: 6, paddingHorizontal: 2 },
+  checkButton: { minHeight: 38, borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, alignItems: 'center', justifyContent: 'center' },
+  checkButtonComplete: { backgroundColor: colors.primary, borderColor: colors.primary },
+  checkComplete: { color: colors.background, fontSize: 17, fontWeight: '900' },
+  checkEmpty: { color: colors.textMuted },
+  setMetaRow: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 47, paddingBottom: 8 },
+  setMetaText: { color: colors.textMuted, fontSize: 11, fontWeight: '700' },
+  addSetButton: { minHeight: 44, alignItems: 'center', justifyContent: 'center', marginTop: spacing.sm, borderRadius: radius.md, backgroundColor: colors.surfaceElevated },
+  addSetLabel: { color: colors.primary, fontSize: 14, fontWeight: '900' },
+  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.72)', alignItems: 'center', justifyContent: 'center', padding: spacing.md },
+  modalCard: { width: '100%', maxWidth: 500, backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1, borderRadius: radius.lg, padding: spacing.lg, gap: spacing.md },
+  modalCardLarge: { width: '100%', maxWidth: 560, maxHeight: '86%', backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1, borderRadius: radius.lg, padding: spacing.lg, gap: spacing.md },
+  modalTitle: { color: colors.text, fontSize: 24, fontWeight: '900' },
+  modalBody: { color: colors.textMuted, fontSize: 14, lineHeight: 20 },
+  exercisePickerList: { maxHeight: 480 },
+  pickerRow: { minHeight: 62, flexDirection: 'row', alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border, paddingVertical: spacing.sm },
+  pickerRowAdded: { opacity: 0.4 },
+  pickerCopy: { flex: 1 },
+  pickerName: { color: colors.text, fontSize: 16, fontWeight: '800' },
+  pickerDetail: { color: colors.textMuted, fontSize: 13, marginTop: 3 },
+  addLabel: { color: colors.primary, fontSize: 13, fontWeight: '900' },
+  addedLabel: { color: colors.textMuted, fontSize: 13, fontWeight: '700' },
+  horizontalButtons: { flexDirection: 'row', gap: spacing.sm },
+  smallAction: { flex: 1, minHeight: 44, borderRadius: radius.md, backgroundColor: colors.surfaceElevated, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
+  smallActionActive: { borderColor: colors.primary },
+  smallActionText: { color: colors.text, fontSize: 13, fontWeight: '800' },
+  smallActionTextActive: { color: colors.primary },
+  controlLabel: { color: colors.textMuted, fontSize: 12, fontWeight: '900', marginTop: spacing.md, marginBottom: spacing.sm, textTransform: 'uppercase' },
+  chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chip: { paddingHorizontal: 12, paddingVertical: 9, backgroundColor: colors.surfaceElevated, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.border },
+  chipActive: { borderColor: colors.primary },
+  chipText: { color: colors.text, fontWeight: '700' },
+  chipTextActive: { color: colors.primary, fontWeight: '900' },
+  effortInput: { color: colors.text, backgroundColor: colors.surfaceElevated, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, paddingHorizontal: spacing.md, minHeight: 48, marginVertical: spacing.sm },
 });

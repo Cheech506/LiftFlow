@@ -14,7 +14,8 @@ import { exerciseLibrary, ExerciseDefinition, ExerciseType } from '@/constants/e
 import { colors, spacing } from '@/constants/theme';
 import { loadLiftFlowState, saveLiftFlowState } from '@/storage/liftflowStorage';
 
-export type WorkoutSetType = 'normal' | 'warmup';
+export type WorkoutSetType = 'normal' | 'warmup' | 'drop' | 'failure' | 'amrap';
+export type EffortMode = 'rpe' | 'rir';
 
 export type WorkoutSet = {
   id: string;
@@ -31,6 +32,7 @@ export type WorkoutSet = {
 export type WorkoutExercise = {
   id: string;
   name: string;
+  notes?: string;
   sets: WorkoutSet[];
 };
 
@@ -48,6 +50,7 @@ export type ActiveWorkout = {
   startedAt: number;
   sourceTemplateId?: string;
   notes?: string;
+  restTimerEndsAt?: number;
   exercises: WorkoutExercise[];
 };
 
@@ -62,11 +65,17 @@ export type CompletedWorkout = {
   exercises: WorkoutExercise[];
 };
 
+export type LiftFlowStateSnapshot = {
+  exercises: ExerciseDefinition[];
+  templates: WorkoutTemplate[];
+  activeWorkout: ActiveWorkout | null;
+  completedWorkouts: CompletedWorkout[];
+};
+
 type SetValueField = 'weight' | 'reps';
 type PersistenceStatus = 'loading' | 'saving' | 'saved' | 'error';
-type FinishWorkoutOptions = {
-  updateTemplate?: boolean;
-};
+type MoveDirection = 'up' | 'down';
+type FinishWorkoutOptions = { updateTemplate?: boolean };
 
 export type CreateExerciseInput = {
   name: string;
@@ -77,9 +86,7 @@ export type CreateExerciseInput = {
   defaultReps?: number;
 };
 
-export type UpdateExerciseInput = CreateExerciseInput & {
-  id: string;
-};
+export type UpdateExerciseInput = CreateExerciseInput & { id: string };
 
 export type ExerciseUsage = {
   templates: number;
@@ -118,22 +125,32 @@ type ActiveWorkoutContextValue = {
   createTemplate: (input: CreateTemplateInput) => WorkoutTemplate;
   updateTemplate: (input: UpdateTemplateInput) => WorkoutTemplate | null;
   deleteTemplate: (templateId: string) => boolean;
-  startWorkout: (name: string, templateId?: string) => void;
+  startWorkout: (name: string, templateId?: string) => boolean;
   toggleSet: (exerciseId: string, setId: string) => void;
+  setSetType: (exerciseId: string, setId: string, setType: WorkoutSetType) => void;
   toggleSetType: (exerciseId: string, setId: string) => void;
-  updateSetValue: (
-    exerciseId: string,
-    setId: string,
-    field: SetValueField,
-    value: number | undefined,
-  ) => void;
+  updateSetValue: (exerciseId: string, setId: string, field: SetValueField, value: number | undefined) => void;
+  updateSetEffort: (exerciseId: string, setId: string, mode: EffortMode | null, value?: number) => void;
   copyPreviousSet: (exerciseId: string, setId: string) => void;
   addSet: (exerciseId: string) => void;
+  removeSet: (exerciseId: string, setId: string) => void;
+  moveSet: (exerciseId: string, setId: string, direction: MoveDirection) => void;
   addExercise: (exerciseId: string) => void;
   removeExercise: (exerciseId: string) => void;
+  moveExercise: (exerciseId: string, direction: MoveDirection) => void;
+  replaceExercise: (workoutExerciseId: string, exerciseDefinitionId: string) => void;
+  updateExerciseNotes: (exerciseId: string, notes: string) => void;
   updateWorkoutNotes: (notes: string) => void;
+  setRestTimer: (seconds: number) => void;
+  clearRestTimer: () => void;
   finishWorkout: (options?: FinishWorkoutOptions) => void;
   discardWorkout: () => void;
+  updateCompletedWorkout: (workout: CompletedWorkout) => void;
+  deleteCompletedWorkout: (workoutId: string) => boolean;
+  repeatCompletedWorkout: (workoutId: string) => boolean;
+  saveCompletedWorkoutAsTemplate: (workoutId: string) => WorkoutTemplate | null;
+  getStateSnapshot: () => LiftFlowStateSnapshot;
+  restoreState: (snapshot: LiftFlowStateSnapshot) => Promise<void>;
 };
 
 const ActiveWorkoutContext = createContext<ActiveWorkoutContextValue | null>(null);
@@ -277,11 +294,17 @@ const initialTemplates: WorkoutTemplate[] = [
   },
 ];
 
+const cloneExercises = (exercises: WorkoutExercise[]): WorkoutExercise[] =>
+  exercises.map((exercise) => ({
+    ...exercise,
+    sets: exercise.sets.map((set) => ({ ...set })),
+  }));
+
 const cloneTemplateExercises = (template: WorkoutTemplate): WorkoutExercise[] => {
   const workoutStamp = Date.now();
-
-  return template.exercises.map((exercise) => ({
+  return template.exercises.map((exercise, exerciseIndex) => ({
     ...exercise,
+    id: `${exercise.id}-${workoutStamp}-${exerciseIndex}`,
     sets: exercise.sets.map((set, index) => ({
       id: `${exercise.id}-${workoutStamp}-${index}`,
       previousWeight: set.weight,
@@ -297,16 +320,20 @@ const cloneTemplateExercises = (template: WorkoutTemplate): WorkoutExercise[] =>
 };
 
 function toId(value: string) {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-|-$)/g, '');
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 }
 
 function getTemplateDetail(exercises: WorkoutExercise[]) {
   const setCount = exercises.reduce((total, exercise) => total + exercise.sets.length, 0);
   return `${exercises.length} exercise${exercises.length === 1 ? '' : 's'} · ${setCount} planned sets`;
+}
+
+function moveItem<T>(items: T[], index: number, direction: MoveDirection) {
+  const target = direction === 'up' ? index - 1 : index + 1;
+  if (index < 0 || target < 0 || target >= items.length) return items;
+  const copy = [...items];
+  [copy[index], copy[target]] = [copy[target], copy[index]];
+  return copy;
 }
 
 export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
@@ -315,19 +342,16 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
   const [templates, setTemplates] = useState<WorkoutTemplate[]>(initialTemplates);
   const [completedWorkouts, setCompletedWorkouts] = useState<CompletedWorkout[]>([]);
   const [isHydrated, setIsHydrated] = useState(false);
-  const [persistenceStatus, setPersistenceStatus] =
-    useState<PersistenceStatus>('loading');
+  const [persistenceStatus, setPersistenceStatus] = useState<PersistenceStatus>('loading');
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-
     const hydrate = async () => {
       try {
         const savedState = await loadLiftFlowState();
         if (cancelled) return;
-
         if (savedState) {
           setExercises(savedState.exercises);
           setTemplates(savedState.templates);
@@ -343,39 +367,23 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
         if (!cancelled) setIsHydrated(true);
       }
     };
-
     void hydrate();
-
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
     if (!isHydrated) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     setPersistenceStatus('saving');
-
     saveTimerRef.current = setTimeout(() => {
-      void saveLiftFlowState({
-        exercises,
-        templates,
-        activeWorkout: workout,
-        completedWorkouts,
-      })
-        .then(() => {
-          setPersistenceStatus('saved');
-          setLastSavedAt(Date.now());
-        })
+      void saveLiftFlowState({ exercises, templates, activeWorkout: workout, completedWorkouts })
+        .then(() => { setPersistenceStatus('saved'); setLastSavedAt(Date.now()); })
         .catch((error: unknown) => {
           console.error('Unable to save LiftFlow local data.', error);
           setPersistenceStatus('error');
         });
     }, 150);
-
-    return () => {
-      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    };
+    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
   }, [completedWorkouts, exercises, isHydrated, templates, workout]);
 
   const createExercise = useCallback((input: CreateExerciseInput) => {
@@ -392,564 +400,282 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
       defaultReps: input.defaultReps ?? 8,
       isCustom: true,
     };
-
     setExercises((current) => [...current, exercise]);
     return exercise;
   }, []);
 
+  const updateExercise = useCallback((input: UpdateExerciseInput) => {
+    const existing = exercises.find((exercise) => exercise.id === input.id);
+    if (!existing?.isCustom) return null;
+    const trimmedName = input.name.trim();
+    const oldName = existing.name;
+    const renamed = trimmedName !== oldName;
+    const previousNames = renamed
+      ? Array.from(new Set([...(existing.previousNames ?? []), oldName]))
+      : existing.previousNames;
+    const updated: ExerciseDefinition = {
+      ...existing,
+      name: trimmedName,
+      detail: `${input.primaryMuscle.trim()} · ${input.equipment.trim()}`,
+      primaryMuscle: input.primaryMuscle.trim(),
+      equipment: input.equipment.trim(),
+      exerciseType: input.exerciseType,
+      defaultWeight: input.exerciseType === 'Weight & Reps' ? input.defaultWeight : undefined,
+      defaultReps: input.defaultReps ?? 8,
+      previousNames,
+    };
+    setExercises((current) => current.map((exercise) => exercise.id === input.id ? updated : exercise));
+    if (renamed) {
+      setTemplates((current) => current.map((template) => ({
+        ...template,
+        exercises: template.exercises.map((exercise) => exercise.name === oldName ? { ...exercise, name: trimmedName } : exercise),
+      })));
+      setWorkout((current) => current ? {
+        ...current,
+        exercises: current.exercises.map((exercise) => exercise.name === oldName ? { ...exercise, name: trimmedName } : exercise),
+      } : current);
+    }
+    return updated;
+  }, [exercises]);
 
-  const updateExercise = useCallback(
-    (input: UpdateExerciseInput) => {
-      const existing = exercises.find((exercise) => exercise.id === input.id);
-      if (!existing?.isCustom) return null;
-
-      const trimmedName = input.name.trim();
-      const oldName = existing.name;
-      const renamed = trimmedName !== oldName;
-      const previousNames = renamed
-        ? Array.from(new Set([...(existing.previousNames ?? []), oldName]))
-        : existing.previousNames;
-
-      const updated: ExerciseDefinition = {
-        ...existing,
-        name: trimmedName,
-        detail: `${input.primaryMuscle.trim()} · ${input.equipment.trim()}`,
-        primaryMuscle: input.primaryMuscle.trim(),
-        equipment: input.equipment.trim(),
-        exerciseType: input.exerciseType,
-        defaultWeight:
-          input.exerciseType === 'Weight & Reps' ? input.defaultWeight : undefined,
-        defaultReps: input.defaultReps ?? 8,
-        previousNames,
-      };
-
-      setExercises((current) =>
-        current.map((exercise) => (exercise.id === input.id ? updated : exercise)),
-      );
-
-      if (renamed) {
-        setTemplates((current) =>
-          current.map((template) => ({
-            ...template,
-            exercises: template.exercises.map((exercise) =>
-              exercise.name === oldName ? { ...exercise, name: trimmedName } : exercise,
-            ),
-          })),
-        );
-        setWorkout((current) =>
-          current
-            ? {
-                ...current,
-                exercises: current.exercises.map((exercise) =>
-                  exercise.name === oldName ? { ...exercise, name: trimmedName } : exercise,
-                ),
-              }
-            : current,
-        );
-      }
-
-      return updated;
-    },
-    [exercises],
-  );
-
-  const getExerciseUsage = useCallback(
-    (exerciseId: string): ExerciseUsage => {
-      const definition = exercises.find((exercise) => exercise.id === exerciseId);
-      if (!definition) {
-        return { templates: 0, completedWorkouts: 0, activeWorkout: false };
-      }
-
-      const names = new Set(
-        [definition.name, ...(definition.previousNames ?? [])].map((name) =>
-          name.trim().toLowerCase(),
-        ),
-      );
-      const matches = (name: string) => names.has(name.trim().toLowerCase());
-
-      return {
-        templates: templates.filter((template) =>
-          template.exercises.some((exercise) => matches(exercise.name)),
-        ).length,
-        completedWorkouts: completedWorkouts.filter((completedWorkout) =>
-          completedWorkout.exercises.some((exercise) => matches(exercise.name)),
-        ).length,
-        activeWorkout: Boolean(
-          workout?.exercises.some((exercise) => matches(exercise.name)),
-        ),
-      };
-    },
-    [completedWorkouts, exercises, templates, workout],
-  );
+  const getExerciseUsage = useCallback((exerciseId: string): ExerciseUsage => {
+    const definition = exercises.find((exercise) => exercise.id === exerciseId);
+    if (!definition) return { templates: 0, completedWorkouts: 0, activeWorkout: false };
+    const names = new Set([definition.name, ...(definition.previousNames ?? [])].map((name) => name.trim().toLowerCase()));
+    const matches = (name: string) => names.has(name.trim().toLowerCase());
+    return {
+      templates: templates.filter((template) => template.exercises.some((exercise) => matches(exercise.name))).length,
+      completedWorkouts: completedWorkouts.filter((item) => item.exercises.some((exercise) => matches(exercise.name))).length,
+      activeWorkout: Boolean(workout?.exercises.some((exercise) => matches(exercise.name))),
+    };
+  }, [completedWorkouts, exercises, templates, workout]);
 
   const setExerciseArchived = useCallback((exerciseId: string, archived: boolean) => {
-    setExercises((current) =>
-      current.map((exercise) =>
-        exercise.id === exerciseId && exercise.isCustom
-          ? { ...exercise, archived }
-          : exercise,
-      ),
-    );
+    setExercises((current) => current.map((exercise) => exercise.id === exerciseId && exercise.isCustom ? { ...exercise, archived } : exercise));
   }, []);
 
-  const deleteExercise = useCallback(
-    (exerciseId: string) => {
-      const definition = exercises.find((exercise) => exercise.id === exerciseId);
-      if (!definition?.isCustom || !definition.archived) return false;
+  const deleteExercise = useCallback((exerciseId: string) => {
+    const definition = exercises.find((exercise) => exercise.id === exerciseId);
+    if (!definition?.isCustom || !definition.archived) return false;
+    const usage = getExerciseUsage(exerciseId);
+    if (usage.templates > 0 || usage.completedWorkouts > 0 || usage.activeWorkout) return false;
+    setExercises((current) => current.filter((exercise) => exercise.id !== exerciseId));
+    return true;
+  }, [exercises, getExerciseUsage]);
 
-      const usage = getExerciseUsage(exerciseId);
-      if (usage.templates > 0 || usage.completedWorkouts > 0 || usage.activeWorkout) {
-        return false;
-      }
-
-      setExercises((current) => current.filter((exercise) => exercise.id !== exerciseId));
-      return true;
-    },
-    [exercises, getExerciseUsage],
-  );
-
-  const createTemplate = useCallback(
-    (input: CreateTemplateInput) => {
-      const templateId = `${toId(input.name) || 'template'}-${Date.now()}`;
-      const selectedExercises = input.exerciseIds
-        .map((exerciseId) => exercises.find((exercise) => exercise.id === exerciseId))
-        .filter(
-          (exercise): exercise is ExerciseDefinition => Boolean(exercise && !exercise.archived),
-        );
-      const safeSetCount = Math.min(10, Math.max(1, Math.round(input.setCount)));
-
-      const templateExercises: WorkoutExercise[] = selectedExercises.map((definition) => ({
-        id: `${templateId}-${definition.id}`,
-        name: definition.name,
-        sets: Array.from({ length: safeSetCount }, (_, index) => ({
-          id: `${templateId}-${definition.id}-${index + 1}`,
-          weight: definition.defaultWeight,
-          reps: definition.defaultReps ?? 8,
-          setType: 'normal',
-          completed: false,
-        })),
-      }));
-
-      const template: WorkoutTemplate = {
-        id: templateId,
-        name: input.name.trim(),
-        folder: input.folder.trim() || 'My Workouts',
-        detail: getTemplateDetail(templateExercises),
-        exercises: templateExercises,
-      };
-
-      setTemplates((current) => [...current, template]);
-      return template;
-    },
-    [exercises],
-  );
+  const createTemplate = useCallback((input: CreateTemplateInput) => {
+    const templateId = `${toId(input.name) || 'template'}-${Date.now()}`;
+    const selected = input.exerciseIds.map((id) => exercises.find((item) => item.id === id)).filter((item): item is ExerciseDefinition => Boolean(item && !item.archived));
+    const safeSetCount = Math.min(10, Math.max(1, Math.round(input.setCount)));
+    const templateExercises = selected.map((definition) => ({
+      id: `${templateId}-${definition.id}`,
+      name: definition.name,
+      notes: '',
+      sets: Array.from({ length: safeSetCount }, (_, index) => ({
+        id: `${templateId}-${definition.id}-${index + 1}`,
+        weight: definition.defaultWeight,
+        reps: definition.defaultReps ?? 8,
+        setType: 'normal' as const,
+        completed: false,
+      })),
+    }));
+    const template: WorkoutTemplate = { id: templateId, name: input.name.trim(), folder: input.folder.trim() || 'My Workouts', detail: getTemplateDetail(templateExercises), exercises: templateExercises };
+    setTemplates((current) => [...current, template]);
+    return template;
+  }, [exercises]);
 
   const updateTemplate = useCallback((input: UpdateTemplateInput) => {
-    const trimmedName = input.name.trim();
-    const trimmedFolder = input.folder.trim() || 'My Workouts';
-    if (!trimmedName || input.exercises.length === 0) return null;
-
-    const normalizedExercises = input.exercises.map((exercise, exerciseIndex) => ({
+    const name = input.name.trim();
+    if (!name || input.exercises.length === 0) return null;
+    const normalized = input.exercises.map((exercise, exerciseIndex) => ({
       ...exercise,
       id: exercise.id || `${input.id}-exercise-${exerciseIndex + 1}`,
       sets: exercise.sets.map((set, setIndex) => ({
         ...set,
         id: set.id || `${input.id}-${exercise.id || exerciseIndex + 1}-set-${setIndex + 1}`,
         completed: false,
-        rpe: set.rpe,
-        rir: set.rir,
         setType: set.setType ?? 'normal',
       })),
     }));
-
-    const updatedTemplate: WorkoutTemplate = {
-      id: input.id,
-      name: trimmedName,
-      folder: trimmedFolder,
-      detail: getTemplateDetail(normalizedExercises),
-      exercises: normalizedExercises,
-    };
-
-    setTemplates((current) =>
-      current.map((template) => (template.id === input.id ? updatedTemplate : template)),
-    );
-    return updatedTemplate;
+    const updated: WorkoutTemplate = { id: input.id, name, folder: input.folder.trim() || 'My Workouts', detail: getTemplateDetail(normalized), exercises: normalized };
+    setTemplates((current) => current.map((template) => template.id === input.id ? updated : template));
+    return updated;
   }, []);
 
-  const deleteTemplate = useCallback(
-    (templateId: string) => {
-      if (!templates.some((template) => template.id === templateId)) return false;
-      setTemplates((current) => current.filter((template) => template.id !== templateId));
-      return true;
-    },
-    [templates],
-  );
+  const deleteTemplate = useCallback((templateId: string) => {
+    if (!templates.some((template) => template.id === templateId)) return false;
+    setTemplates((current) => current.filter((template) => template.id !== templateId));
+    return true;
+  }, [templates]);
 
-  const startWorkout = useCallback(
-    (name: string, templateId?: string) => {
-      const template = templateId
-        ? templates.find((candidate) => candidate.id === templateId)
-        : undefined;
+  const startWorkout = useCallback((name: string, templateId?: string) => {
+    if (workout) return false;
+    const template = templateId ? templates.find((candidate) => candidate.id === templateId) : undefined;
+    setWorkout({ id: `workout-${Date.now()}`, name, startedAt: Date.now(), sourceTemplateId: template?.id, notes: '', exercises: template ? cloneTemplateExercises(template) : [] });
+    return true;
+  }, [templates, workout]);
 
-      setWorkout({
-        id: `workout-${Date.now()}`,
-        name,
-        startedAt: Date.now(),
-        sourceTemplateId: template?.id,
-        notes: '',
-        exercises: template ? cloneTemplateExercises(template) : [],
-      });
-    },
-    [templates],
-  );
-
-  const toggleSet = useCallback((exerciseId: string, setId: string) => {
-    setWorkout((current) => {
-      if (!current) return current;
-
-      return {
-        ...current,
-        exercises: current.exercises.map((exercise) =>
-          exercise.id !== exerciseId
-            ? exercise
-            : {
-                ...exercise,
-                sets: exercise.sets.map((set) =>
-                  set.id === setId ? { ...set, completed: !set.completed } : set,
-                ),
-              },
-        ),
-      };
-    });
+  const updateWorkoutExercise = useCallback((exerciseId: string, updater: (exercise: WorkoutExercise) => WorkoutExercise) => {
+    setWorkout((current) => current ? { ...current, exercises: current.exercises.map((exercise) => exercise.id === exerciseId ? updater(exercise) : exercise) } : current);
   }, []);
 
-  const toggleSetType = useCallback((exerciseId: string, setId: string) => {
-    setWorkout((current) => {
-      if (!current) return current;
+  const toggleSet = useCallback((exerciseId: string, setId: string) => updateWorkoutExercise(exerciseId, (exercise) => ({ ...exercise, sets: exercise.sets.map((set) => set.id === setId ? { ...set, completed: !set.completed } : set) })), [updateWorkoutExercise]);
+  const setSetType = useCallback((exerciseId: string, setId: string, setType: WorkoutSetType) => updateWorkoutExercise(exerciseId, (exercise) => ({ ...exercise, sets: exercise.sets.map((set) => set.id === setId ? { ...set, setType } : set) })), [updateWorkoutExercise]);
+  const toggleSetType = useCallback((exerciseId: string, setId: string) => updateWorkoutExercise(exerciseId, (exercise) => ({ ...exercise, sets: exercise.sets.map((set) => set.id === setId ? { ...set, setType: (set.setType ?? 'normal') === 'warmup' ? 'normal' : 'warmup' } : set) })), [updateWorkoutExercise]);
+  const updateSetValue = useCallback((exerciseId: string, setId: string, field: SetValueField, value: number | undefined) => updateWorkoutExercise(exerciseId, (exercise) => ({ ...exercise, sets: exercise.sets.map((set) => set.id === setId ? { ...set, [field]: value } : set) })), [updateWorkoutExercise]);
+  const updateSetEffort = useCallback((exerciseId: string, setId: string, mode: EffortMode | null, value?: number) => updateWorkoutExercise(exerciseId, (exercise) => ({ ...exercise, sets: exercise.sets.map((set) => {
+    if (set.id !== setId) return set;
+    if (mode === null) return { ...set, rpe: undefined, rir: undefined };
+    const safe = value === undefined ? undefined : Math.max(0, Math.min(mode === 'rpe' ? 10 : 10, value));
+    return mode === 'rpe' ? { ...set, rpe: safe, rir: undefined } : { ...set, rir: safe, rpe: undefined };
+  }) })), [updateWorkoutExercise]);
+  const copyPreviousSet = useCallback((exerciseId: string, setId: string) => updateWorkoutExercise(exerciseId, (exercise) => ({ ...exercise, sets: exercise.sets.map((set) => set.id === setId ? { ...set, weight: set.previousWeight, reps: set.previousReps } : set) })), [updateWorkoutExercise]);
 
-      return {
-        ...current,
-        exercises: current.exercises.map((exercise) =>
-          exercise.id !== exerciseId
-            ? exercise
-            : {
-                ...exercise,
-                sets: exercise.sets.map((set) =>
-                  set.id === setId
-                    ? {
-                        ...set,
-                        setType: (set.setType ?? 'normal') === 'warmup' ? 'normal' : 'warmup',
-                      }
-                    : set,
-                ),
-              },
-        ),
-      };
-    });
-  }, []);
+  const addSet = useCallback((exerciseId: string) => updateWorkoutExercise(exerciseId, (exercise) => {
+    const last = exercise.sets.at(-1);
+    return { ...exercise, sets: [...exercise.sets, { id: `${exercise.id}-${Date.now()}`, previousWeight: last?.weight, previousReps: last?.reps, weight: last?.weight, reps: last?.reps, setType: 'normal', completed: false }] };
+  }), [updateWorkoutExercise]);
 
-  const updateSetValue = useCallback(
-    (
-      exerciseId: string,
-      setId: string,
-      field: SetValueField,
-      value: number | undefined,
-    ) => {
-      setWorkout((current) => {
-        if (!current) return current;
-
-        return {
-          ...current,
-          exercises: current.exercises.map((exercise) =>
-            exercise.id !== exerciseId
-              ? exercise
-              : {
-                  ...exercise,
-                  sets: exercise.sets.map((set) =>
-                    set.id === setId ? { ...set, [field]: value } : set,
-                  ),
-                },
-          ),
-        };
-      });
-    },
-    [],
-  );
-
-  const copyPreviousSet = useCallback((exerciseId: string, setId: string) => {
-    setWorkout((current) => {
-      if (!current) return current;
-
-      return {
-        ...current,
-        exercises: current.exercises.map((exercise) =>
-          exercise.id !== exerciseId
-            ? exercise
-            : {
-                ...exercise,
-                sets: exercise.sets.map((set) =>
-                  set.id === setId
-                    ? {
-                        ...set,
-                        weight: set.previousWeight,
-                        reps: set.previousReps,
-                      }
-                    : set,
-                ),
-              },
-        ),
-      };
-    });
-  }, []);
-
-  const addSet = useCallback((exerciseId: string) => {
-    setWorkout((current) => {
-      if (!current) return current;
-
-      return {
-        ...current,
-        exercises: current.exercises.map((exercise) => {
-          if (exercise.id !== exerciseId) return exercise;
-          const lastSet = exercise.sets.at(-1);
-
-          return {
-            ...exercise,
-            sets: [
-              ...exercise.sets,
-              {
-                id: `${exercise.id}-${Date.now()}`,
-                previousWeight: lastSet?.weight,
-                previousReps: lastSet?.reps,
-                weight: lastSet?.weight,
-                reps: undefined,
-                setType: 'normal',
-                completed: false,
-              },
-            ],
-          };
-        }),
-      };
-    });
-  }, []);
+  const removeSet = useCallback((exerciseId: string, setId: string) => updateWorkoutExercise(exerciseId, (exercise) => exercise.sets.length <= 1 ? exercise : { ...exercise, sets: exercise.sets.filter((set) => set.id !== setId) }), [updateWorkoutExercise]);
+  const moveSet = useCallback((exerciseId: string, setId: string, direction: MoveDirection) => updateWorkoutExercise(exerciseId, (exercise) => ({ ...exercise, sets: moveItem(exercise.sets, exercise.sets.findIndex((set) => set.id === setId), direction) })), [updateWorkoutExercise]);
 
   const addExercise = useCallback((exerciseId: string) => {
     const definition = exercises.find((item) => item.id === exerciseId);
     if (!definition || definition.archived) return;
-
     setWorkout((current) => {
-      if (!current) return current;
-      if (current.exercises.some((exercise) => exercise.name === definition.name)) {
-        return current;
-      }
-
+      if (!current || current.exercises.some((exercise) => exercise.name === definition.name)) return current;
       const stamp = Date.now();
       const defaultReps = definition.defaultReps ?? 8;
-
-      return {
-        ...current,
-        exercises: [
-          ...current.exercises,
-          {
-            id: `${definition.id}-${stamp}`,
-            name: definition.name,
-            sets: Array.from({ length: 3 }, (_, index) => ({
-              id: `${definition.id}-${stamp}-${index + 1}`,
-              previousWeight: definition.defaultWeight,
-              previousReps: defaultReps,
-              weight: definition.defaultWeight,
-              reps: defaultReps,
-              setType: 'normal',
-              completed: false,
-            })),
-          },
-        ],
-      };
+      return { ...current, exercises: [...current.exercises, {
+        id: `${definition.id}-${stamp}`, name: definition.name, notes: '',
+        sets: Array.from({ length: 3 }, (_, index) => ({ id: `${definition.id}-${stamp}-${index + 1}`, previousWeight: definition.defaultWeight, previousReps: defaultReps, weight: definition.defaultWeight, reps: defaultReps, setType: 'normal', completed: false })),
+      }] };
     });
   }, [exercises]);
 
-  const removeExercise = useCallback((exerciseId: string) => {
-    setWorkout((current) => {
-      if (!current) return current;
-      return {
-        ...current,
-        exercises: current.exercises.filter((exercise) => exercise.id !== exerciseId),
-      };
-    });
-  }, []);
+  const removeExercise = useCallback((exerciseId: string) => setWorkout((current) => current ? { ...current, exercises: current.exercises.filter((exercise) => exercise.id !== exerciseId) } : current), []);
+  const moveExercise = useCallback((exerciseId: string, direction: MoveDirection) => setWorkout((current) => current ? { ...current, exercises: moveItem(current.exercises, current.exercises.findIndex((exercise) => exercise.id === exerciseId), direction) } : current), []);
+  const updateExerciseNotes = useCallback((exerciseId: string, notes: string) => updateWorkoutExercise(exerciseId, (exercise) => ({ ...exercise, notes })), [updateWorkoutExercise]);
 
-  const updateWorkoutNotes = useCallback((notes: string) => {
-    setWorkout((current) => (current ? { ...current, notes } : current));
-  }, []);
+  const replaceExercise = useCallback((workoutExerciseId: string, definitionId: string) => {
+    const definition = exercises.find((item) => item.id === definitionId && !item.archived);
+    if (!definition) return;
+    updateWorkoutExercise(workoutExerciseId, (exercise) => ({
+      ...exercise,
+      id: `${definition.id}-${Date.now()}`,
+      name: definition.name,
+      sets: exercise.sets.map((set, index) => ({ ...set, id: `${definition.id}-${Date.now()}-${index}`, previousWeight: definition.defaultWeight, previousReps: definition.defaultReps ?? 8, weight: definition.defaultWeight, reps: definition.defaultReps ?? 8, completed: false })),
+    }));
+  }, [exercises, updateWorkoutExercise]);
 
-  const finishWorkout = useCallback(
-    (options: FinishWorkoutOptions = {}) => {
-      if (!workout) return;
+  const updateWorkoutNotes = useCallback((notes: string) => setWorkout((current) => current ? { ...current, notes } : current), []);
+  const setRestTimer = useCallback((seconds: number) => setWorkout((current) => current ? { ...current, restTimerEndsAt: Date.now() + Math.max(0, seconds) * 1000 } : current), []);
+  const clearRestTimer = useCallback(() => setWorkout((current) => current ? { ...current, restTimerEndsAt: undefined } : current), []);
 
-      const sourceTemplate = workout.sourceTemplateId
-        ? templates.find((template) => template.id === workout.sourceTemplateId)
-        : undefined;
-
-      const completedWorkout: CompletedWorkout = {
-        ...workout,
-        completedAt: Date.now(),
-        sourceFolder: sourceTemplate?.folder,
-        exercises: workout.exercises.map((exercise) => ({
-          ...exercise,
-          sets: exercise.sets.map((set) => ({ ...set })),
-        })),
-      };
-
-      if (options.updateTemplate && workout.sourceTemplateId) {
-        setTemplates((currentTemplates) =>
-          currentTemplates.map((template) => {
-            if (template.id !== workout.sourceTemplateId) return template;
-
-            return {
-              ...template,
-              detail: `${workout.exercises.length} exercise${
-                workout.exercises.length === 1 ? '' : 's'
-              } · ${workout.exercises.reduce(
-                (total, exercise) => total + exercise.sets.length,
-                0,
-              )} planned sets`,
-              exercises: workout.exercises.map((exercise) => ({
-                id: exercise.id,
-                name: exercise.name,
-                sets: exercise.sets.map((set, index) => ({
-                  id: `${template.id}-${exercise.id}-template-${index + 1}`,
-                  weight: set.weight,
-                  reps: set.reps,
-                  rpe: set.rpe,
-                  rir: set.rir,
-                  setType: set.setType ?? 'normal',
-                  completed: false,
-                })),
-              })),
-            };
-          }),
-        );
-      }
-
-      setCompletedWorkouts((current) => [completedWorkout, ...current]);
-      setWorkout(null);
-    },
-    [templates, workout],
-  );
+  const finishWorkout = useCallback((options: FinishWorkoutOptions = {}) => {
+    if (!workout) return;
+    const sourceTemplate = workout.sourceTemplateId ? templates.find((template) => template.id === workout.sourceTemplateId) : undefined;
+    const { restTimerEndsAt: _restTimerEndsAt, ...workoutWithoutTimer } = workout;
+    const completedWorkout: CompletedWorkout = { ...workoutWithoutTimer, completedAt: Date.now(), sourceFolder: sourceTemplate?.folder, exercises: cloneExercises(workout.exercises) };
+    if (options.updateTemplate && workout.sourceTemplateId) {
+      setTemplates((current) => current.map((template) => template.id !== workout.sourceTemplateId ? template : {
+        ...template,
+        detail: getTemplateDetail(workout.exercises),
+        exercises: workout.exercises.map((exercise) => ({ ...exercise, sets: exercise.sets.map((set, index) => ({ ...set, id: `${template.id}-${exercise.id}-template-${index + 1}`, previousWeight: undefined, previousReps: undefined, completed: false })) })),
+      }));
+    }
+    setCompletedWorkouts((current) => [completedWorkout, ...current]);
+    setWorkout(null);
+  }, [templates, workout]);
 
   const discardWorkout = useCallback(() => setWorkout(null), []);
+  const updateCompletedWorkout = useCallback((updated: CompletedWorkout) => setCompletedWorkouts((current) => current.map((item) => item.id === updated.id ? { ...updated, exercises: cloneExercises(updated.exercises) } : item)), []);
+  const deleteCompletedWorkout = useCallback((workoutId: string) => {
+    if (!completedWorkouts.some((item) => item.id === workoutId)) return false;
+    setCompletedWorkouts((current) => current.filter((item) => item.id !== workoutId));
+    return true;
+  }, [completedWorkouts]);
+
+  const repeatCompletedWorkout = useCallback((workoutId: string) => {
+    if (workout) return false;
+    const completed = completedWorkouts.find((item) => item.id === workoutId);
+    if (!completed) return false;
+    const stamp = Date.now();
+    setWorkout({ id: `workout-${stamp}`, name: completed.name, startedAt: stamp, sourceTemplateId: completed.sourceTemplateId, notes: '', exercises: completed.exercises.map((exercise, exerciseIndex) => ({ ...exercise, id: `${exercise.id}-repeat-${stamp}-${exerciseIndex}`, sets: exercise.sets.map((set, setIndex) => ({ ...set, id: `${set.id}-repeat-${stamp}-${setIndex}`, previousWeight: set.weight, previousReps: set.reps, completed: false })) })) });
+    return true;
+  }, [completedWorkouts, workout]);
+
+  const saveCompletedWorkoutAsTemplate = useCallback((workoutId: string) => {
+    const completed = completedWorkouts.find((item) => item.id === workoutId);
+    if (!completed) return null;
+    const stamp = Date.now();
+    const template: WorkoutTemplate = {
+      id: `${toId(completed.name) || 'history-template'}-${stamp}`,
+      name: `${completed.name} Copy`,
+      folder: completed.sourceFolder || 'From History',
+      detail: getTemplateDetail(completed.exercises),
+      exercises: completed.exercises.map((exercise, exerciseIndex) => ({ ...exercise, id: `${exercise.id}-template-${stamp}-${exerciseIndex}`, sets: exercise.sets.map((set, setIndex) => ({ ...set, id: `${set.id}-template-${stamp}-${setIndex}`, previousWeight: undefined, previousReps: undefined, completed: false })) })),
+    };
+    setTemplates((current) => [...current, template]);
+    return template;
+  }, [completedWorkouts]);
+
+  const getStateSnapshot = useCallback((): LiftFlowStateSnapshot => ({ exercises: exercises.map((item) => ({ ...item })), templates: templates.map((item) => ({ ...item, exercises: cloneExercises(item.exercises) })), activeWorkout: workout ? { ...workout, exercises: cloneExercises(workout.exercises) } : null, completedWorkouts: completedWorkouts.map((item) => ({ ...item, exercises: cloneExercises(item.exercises) })) }), [completedWorkouts, exercises, templates, workout]);
+
+  const restoreState = useCallback(async (snapshot: LiftFlowStateSnapshot) => {
+    const safe: LiftFlowStateSnapshot = { exercises: snapshot.exercises.map((item) => ({ ...item })), templates: snapshot.templates.map((item) => ({ ...item, exercises: cloneExercises(item.exercises) })), activeWorkout: snapshot.activeWorkout ? { ...snapshot.activeWorkout, exercises: cloneExercises(snapshot.activeWorkout.exercises) } : null, completedWorkouts: snapshot.completedWorkouts.map((item) => ({ ...item, exercises: cloneExercises(item.exercises) })) };
+    await saveLiftFlowState(safe);
+    setExercises(safe.exercises);
+    setTemplates(safe.templates);
+    setWorkout(safe.activeWorkout);
+    setCompletedWorkouts(safe.completedWorkouts);
+    setPersistenceStatus('saved');
+    setLastSavedAt(Date.now());
+  }, []);
 
   const { completedSetCount, totalSetCount } = useMemo(() => {
     const sets = workout?.exercises.flatMap((exercise) => exercise.sets) ?? [];
-    return {
-      completedSetCount: sets.filter((set) => set.completed).length,
-      totalSetCount: sets.length,
-    };
+    return { completedSetCount: sets.filter((set) => set.completed).length, totalSetCount: sets.length };
   }, [workout]);
 
-  const value = useMemo(
-    () => ({
-      workout,
-      exercises,
-      templates,
-      completedWorkouts,
-      completedSetCount,
-      totalSetCount,
-      persistenceStatus,
-      lastSavedAt,
-      createExercise,
-      updateExercise,
-      setExerciseArchived,
-      deleteExercise,
-      getExerciseUsage,
-      createTemplate,
-      updateTemplate,
-      deleteTemplate,
-      startWorkout,
-      toggleSet,
-      toggleSetType,
-      updateSetValue,
-      copyPreviousSet,
-      addSet,
-      addExercise,
-      removeExercise,
-      updateWorkoutNotes,
-      finishWorkout,
-      discardWorkout,
-    }),
-    [
-      workout,
-      exercises,
-      templates,
-      completedWorkouts,
-      completedSetCount,
-      totalSetCount,
-      persistenceStatus,
-      lastSavedAt,
-      createExercise,
-      updateExercise,
-      setExerciseArchived,
-      deleteExercise,
-      getExerciseUsage,
-      createTemplate,
-      updateTemplate,
-      deleteTemplate,
-      startWorkout,
-      toggleSet,
-      toggleSetType,
-      updateSetValue,
-      copyPreviousSet,
-      addSet,
-      addExercise,
-      removeExercise,
-      updateWorkoutNotes,
-      finishWorkout,
-      discardWorkout,
-    ],
+  const value = useMemo<ActiveWorkoutContextValue>(() => ({
+    workout, exercises, templates, completedWorkouts, completedSetCount, totalSetCount, persistenceStatus, lastSavedAt,
+    createExercise, updateExercise, setExerciseArchived, deleteExercise, getExerciseUsage,
+    createTemplate, updateTemplate, deleteTemplate, startWorkout, toggleSet, setSetType, toggleSetType,
+    updateSetValue, updateSetEffort, copyPreviousSet, addSet, removeSet, moveSet, addExercise,
+    removeExercise, moveExercise, replaceExercise, updateExerciseNotes, updateWorkoutNotes,
+    setRestTimer, clearRestTimer, finishWorkout, discardWorkout, updateCompletedWorkout,
+    deleteCompletedWorkout, repeatCompletedWorkout, saveCompletedWorkoutAsTemplate,
+    getStateSnapshot, restoreState,
+  }), [
+    workout, exercises, templates, completedWorkouts, completedSetCount, totalSetCount, persistenceStatus, lastSavedAt,
+    createExercise, updateExercise, setExerciseArchived, deleteExercise, getExerciseUsage,
+    createTemplate, updateTemplate, deleteTemplate, startWorkout, toggleSet, setSetType, toggleSetType,
+    updateSetValue, updateSetEffort, copyPreviousSet, addSet, removeSet, moveSet, addExercise,
+    removeExercise, moveExercise, replaceExercise, updateExerciseNotes, updateWorkoutNotes,
+    setRestTimer, clearRestTimer, finishWorkout, discardWorkout, updateCompletedWorkout,
+    deleteCompletedWorkout, repeatCompletedWorkout, saveCompletedWorkoutAsTemplate, getStateSnapshot, restoreState,
+  ]);
+
+  if (!isHydrated) return (
+    <View style={styles.loadingScreen}>
+      <ActivityIndicator color={colors.primary} size="large" />
+      <Text style={styles.loadingTitle}>Loading LiftFlow</Text>
+      <Text style={styles.loadingCopy}>Restoring workouts saved on this device…</Text>
+    </View>
   );
 
-  if (!isHydrated) {
-    return (
-      <View style={styles.loadingScreen}>
-        <ActivityIndicator color={colors.primary} size="large" />
-        <Text style={styles.loadingTitle}>Loading LiftFlow</Text>
-        <Text style={styles.loadingCopy}>Restoring workouts saved on this device…</Text>
-      </View>
-    );
-  }
-
-  return (
-    <ActiveWorkoutContext.Provider value={value}>
-      {children}
-    </ActiveWorkoutContext.Provider>
-  );
+  return <ActiveWorkoutContext.Provider value={value}>{children}</ActiveWorkoutContext.Provider>;
 }
 
 export function useActiveWorkout() {
   const context = useContext(ActiveWorkoutContext);
-  if (!context) {
-    throw new Error('useActiveWorkout must be used inside ActiveWorkoutProvider');
-  }
+  if (!context) throw new Error('useActiveWorkout must be used inside ActiveWorkoutProvider');
   return context;
 }
 
 const styles = StyleSheet.create({
-  loadingScreen: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.sm,
-    padding: spacing.lg,
-    backgroundColor: colors.background,
-  },
-  loadingTitle: {
-    color: colors.text,
-    fontSize: 20,
-    fontWeight: '900',
-    marginTop: spacing.sm,
-  },
-  loadingCopy: {
-    color: colors.textMuted,
-    fontSize: 14,
-    textAlign: 'center',
-  },
+  loadingScreen: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.sm, padding: spacing.lg, backgroundColor: colors.background },
+  loadingTitle: { color: colors.text, fontSize: 20, fontWeight: '900', marginTop: spacing.sm },
+  loadingCopy: { color: colors.textMuted, fontSize: 14, textAlign: 'center' },
 });
