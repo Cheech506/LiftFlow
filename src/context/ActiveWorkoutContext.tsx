@@ -77,6 +77,16 @@ export type CreateExerciseInput = {
   defaultReps?: number;
 };
 
+export type UpdateExerciseInput = CreateExerciseInput & {
+  id: string;
+};
+
+export type ExerciseUsage = {
+  templates: number;
+  completedWorkouts: number;
+  activeWorkout: boolean;
+};
+
 export type CreateTemplateInput = {
   name: string;
   folder: string;
@@ -101,8 +111,13 @@ type ActiveWorkoutContextValue = {
   persistenceStatus: PersistenceStatus;
   lastSavedAt: number | null;
   createExercise: (input: CreateExerciseInput) => ExerciseDefinition;
+  updateExercise: (input: UpdateExerciseInput) => ExerciseDefinition | null;
+  setExerciseArchived: (exerciseId: string, archived: boolean) => void;
+  deleteExercise: (exerciseId: string) => boolean;
+  getExerciseUsage: (exerciseId: string) => ExerciseUsage;
   createTemplate: (input: CreateTemplateInput) => WorkoutTemplate;
   updateTemplate: (input: UpdateTemplateInput) => WorkoutTemplate | null;
+  deleteTemplate: (templateId: string) => boolean;
   startWorkout: (name: string, templateId?: string) => void;
   toggleSet: (exerciseId: string, setId: string) => void;
   toggleSetType: (exerciseId: string, setId: string) => void;
@@ -382,12 +397,125 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
     return exercise;
   }, []);
 
+
+  const updateExercise = useCallback(
+    (input: UpdateExerciseInput) => {
+      const existing = exercises.find((exercise) => exercise.id === input.id);
+      if (!existing?.isCustom) return null;
+
+      const trimmedName = input.name.trim();
+      const oldName = existing.name;
+      const renamed = trimmedName !== oldName;
+      const previousNames = renamed
+        ? Array.from(new Set([...(existing.previousNames ?? []), oldName]))
+        : existing.previousNames;
+
+      const updated: ExerciseDefinition = {
+        ...existing,
+        name: trimmedName,
+        detail: `${input.primaryMuscle.trim()} · ${input.equipment.trim()}`,
+        primaryMuscle: input.primaryMuscle.trim(),
+        equipment: input.equipment.trim(),
+        exerciseType: input.exerciseType,
+        defaultWeight:
+          input.exerciseType === 'Weight & Reps' ? input.defaultWeight : undefined,
+        defaultReps: input.defaultReps ?? 8,
+        previousNames,
+      };
+
+      setExercises((current) =>
+        current.map((exercise) => (exercise.id === input.id ? updated : exercise)),
+      );
+
+      if (renamed) {
+        setTemplates((current) =>
+          current.map((template) => ({
+            ...template,
+            exercises: template.exercises.map((exercise) =>
+              exercise.name === oldName ? { ...exercise, name: trimmedName } : exercise,
+            ),
+          })),
+        );
+        setWorkout((current) =>
+          current
+            ? {
+                ...current,
+                exercises: current.exercises.map((exercise) =>
+                  exercise.name === oldName ? { ...exercise, name: trimmedName } : exercise,
+                ),
+              }
+            : current,
+        );
+      }
+
+      return updated;
+    },
+    [exercises],
+  );
+
+  const getExerciseUsage = useCallback(
+    (exerciseId: string): ExerciseUsage => {
+      const definition = exercises.find((exercise) => exercise.id === exerciseId);
+      if (!definition) {
+        return { templates: 0, completedWorkouts: 0, activeWorkout: false };
+      }
+
+      const names = new Set(
+        [definition.name, ...(definition.previousNames ?? [])].map((name) =>
+          name.trim().toLowerCase(),
+        ),
+      );
+      const matches = (name: string) => names.has(name.trim().toLowerCase());
+
+      return {
+        templates: templates.filter((template) =>
+          template.exercises.some((exercise) => matches(exercise.name)),
+        ).length,
+        completedWorkouts: completedWorkouts.filter((completedWorkout) =>
+          completedWorkout.exercises.some((exercise) => matches(exercise.name)),
+        ).length,
+        activeWorkout: Boolean(
+          workout?.exercises.some((exercise) => matches(exercise.name)),
+        ),
+      };
+    },
+    [completedWorkouts, exercises, templates, workout],
+  );
+
+  const setExerciseArchived = useCallback((exerciseId: string, archived: boolean) => {
+    setExercises((current) =>
+      current.map((exercise) =>
+        exercise.id === exerciseId && exercise.isCustom
+          ? { ...exercise, archived }
+          : exercise,
+      ),
+    );
+  }, []);
+
+  const deleteExercise = useCallback(
+    (exerciseId: string) => {
+      const definition = exercises.find((exercise) => exercise.id === exerciseId);
+      if (!definition?.isCustom || !definition.archived) return false;
+
+      const usage = getExerciseUsage(exerciseId);
+      if (usage.templates > 0 || usage.completedWorkouts > 0 || usage.activeWorkout) {
+        return false;
+      }
+
+      setExercises((current) => current.filter((exercise) => exercise.id !== exerciseId));
+      return true;
+    },
+    [exercises, getExerciseUsage],
+  );
+
   const createTemplate = useCallback(
     (input: CreateTemplateInput) => {
       const templateId = `${toId(input.name) || 'template'}-${Date.now()}`;
       const selectedExercises = input.exerciseIds
         .map((exerciseId) => exercises.find((exercise) => exercise.id === exerciseId))
-        .filter((exercise): exercise is ExerciseDefinition => Boolean(exercise));
+        .filter(
+          (exercise): exercise is ExerciseDefinition => Boolean(exercise && !exercise.archived),
+        );
       const safeSetCount = Math.min(10, Math.max(1, Math.round(input.setCount)));
 
       const templateExercises: WorkoutExercise[] = selectedExercises.map((definition) => ({
@@ -447,6 +575,15 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
     );
     return updatedTemplate;
   }, []);
+
+  const deleteTemplate = useCallback(
+    (templateId: string) => {
+      if (!templates.some((template) => template.id === templateId)) return false;
+      setTemplates((current) => current.filter((template) => template.id !== templateId));
+      return true;
+    },
+    [templates],
+  );
 
   const startWorkout = useCallback(
     (name: string, templateId?: string) => {
@@ -597,7 +734,7 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
 
   const addExercise = useCallback((exerciseId: string) => {
     const definition = exercises.find((item) => item.id === exerciseId);
-    if (!definition) return;
+    if (!definition || definition.archived) return;
 
     setWorkout((current) => {
       if (!current) return current;
@@ -720,8 +857,13 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
       persistenceStatus,
       lastSavedAt,
       createExercise,
+      updateExercise,
+      setExerciseArchived,
+      deleteExercise,
+      getExerciseUsage,
       createTemplate,
       updateTemplate,
+      deleteTemplate,
       startWorkout,
       toggleSet,
       toggleSetType,
@@ -744,8 +886,13 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
       persistenceStatus,
       lastSavedAt,
       createExercise,
+      updateExercise,
+      setExerciseArchived,
+      deleteExercise,
+      getExerciseUsage,
       createTemplate,
       updateTemplate,
+      deleteTemplate,
       startWorkout,
       toggleSet,
       toggleSetType,

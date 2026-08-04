@@ -1,6 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
+  Alert,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -17,26 +19,51 @@ import { PrimaryButton } from '@/components/PrimaryButton';
 import { SectionCard } from '@/components/SectionCard';
 import { ExerciseDefinition, ExerciseType } from '@/constants/exercises';
 import { colors, radius, spacing } from '@/constants/theme';
-import { CreateExerciseInput, useActiveWorkout } from '@/context/ActiveWorkoutContext';
+import {
+  CreateExerciseInput,
+  ExerciseUsage,
+  useActiveWorkout,
+} from '@/context/ActiveWorkoutContext';
 import { showPrototypeNotice } from '@/lib/prototypeNotice';
 
 const muscleOptions = ['All', 'Chest', 'Back', 'Shoulders', 'Quadriceps', 'Hamstrings'];
 const equipmentOptions = ['All', 'Barbell', 'Dumbbell', 'Cable', 'Machine', 'Bodyweight'];
 const typeOptions: Array<'All' | ExerciseType> = ['All', 'Weight & Reps', 'Bodyweight'];
+const emptyUsage: ExerciseUsage = { templates: 0, completedWorkouts: 0, activeWorkout: false };
 
 export default function ExercisesScreen() {
-  const { exercises, workout, addExercise, createExercise } = useActiveWorkout();
+  const {
+    exercises,
+    workout,
+    addExercise,
+    createExercise,
+    updateExercise,
+    setExerciseArchived,
+    deleteExercise,
+    getExerciseUsage,
+  } = useActiveWorkout();
   const [query, setQuery] = useState('');
   const [muscle, setMuscle] = useState('All');
   const [equipment, setEquipment] = useState('All');
   const [exerciseType, setExerciseType] = useState<'All' | ExerciseType>('All');
-  const [selectedExercise, setSelectedExercise] = useState<ExerciseDefinition | null>(null);
+  const [selectedExerciseId, setSelectedExerciseId] = useState<string | null>(null);
+  const [editingExerciseId, setEditingExerciseId] = useState<string | null>(null);
   const [createVisible, setCreateVisible] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
+
+  const selectedExercise = selectedExerciseId
+    ? exercises.find((exercise) => exercise.id === selectedExerciseId) ?? null
+    : null;
+  const editingExercise = editingExerciseId
+    ? exercises.find((exercise) => exercise.id === editingExerciseId) ?? null
+    : null;
 
   const filteredExercises = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
 
     return exercises.filter((exercise) => {
+      if (exercise.archived) return false;
+
       const matchesSearch =
         !normalizedQuery ||
         exercise.name.toLowerCase().includes(normalizedQuery) ||
@@ -49,11 +76,33 @@ export default function ExercisesScreen() {
     });
   }, [equipment, exerciseType, exercises, muscle, query]);
 
+  const archivedExercises = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    return exercises.filter(
+      (exercise) =>
+        exercise.archived &&
+        (!normalizedQuery ||
+          exercise.name.toLowerCase().includes(normalizedQuery) ||
+          exercise.detail.toLowerCase().includes(normalizedQuery)),
+    );
+  }, [exercises, query]);
+
   const favorites = filteredExercises.filter((exercise) => exercise.favorite);
   const recent = filteredExercises.filter((exercise) => exercise.recent);
   const customExercises = filteredExercises.filter((exercise) => exercise.isCustom);
+  const selectedUsage = selectedExercise
+    ? getExerciseUsage(selectedExercise.id)
+    : emptyUsage;
 
   const addToWorkout = (exercise: ExerciseDefinition) => {
+    if (exercise.archived) {
+      showPrototypeNotice(
+        'Exercise is archived',
+        'Restore this exercise before adding it to a new workout.',
+      );
+      return;
+    }
+
     if (!workout) {
       showPrototypeNotice(
         'No active workout',
@@ -68,7 +117,7 @@ export default function ExercisesScreen() {
     }
 
     addExercise(exercise.id);
-    setSelectedExercise(null);
+    setSelectedExerciseId(null);
     showPrototypeNotice('Exercise added', `${exercise.name} was added to ${workout.name}.`);
   };
 
@@ -88,8 +137,93 @@ export default function ExercisesScreen() {
     const created = createExercise(input);
     setCreateVisible(false);
     setQuery('');
-    setSelectedExercise(created);
+    setSelectedExerciseId(created.id);
     return true;
+  };
+
+  const saveEditedExercise = (input: CreateExerciseInput) => {
+    if (!editingExercise) return false;
+
+    const duplicate = exercises.some(
+      (exercise) =>
+        exercise.id !== editingExercise.id &&
+        exercise.name.trim().toLowerCase() === input.name.trim().toLowerCase(),
+    );
+
+    if (duplicate) {
+      showPrototypeNotice(
+        'Exercise already exists',
+        'Use a different name so every exercise remains easy to identify.',
+      );
+      return false;
+    }
+
+    const updated = updateExercise({ id: editingExercise.id, ...input });
+    if (!updated) {
+      showPrototypeNotice(
+        'Exercise could not be updated',
+        'Only custom exercises can be edited.',
+      );
+      return false;
+    }
+
+    setEditingExerciseId(null);
+    setSelectedExerciseId(updated.id);
+    return true;
+  };
+
+  const archiveSelectedExercise = () => {
+    if (!selectedExercise?.isCustom) return;
+
+    confirmAction(
+      `Archive ${selectedExercise.name}?`,
+      'It will be hidden from new workout and template pickers. Existing templates, active workouts, and history will remain untouched.',
+      'Archive',
+      () => {
+        setExerciseArchived(selectedExercise.id, true);
+        setSelectedExerciseId(null);
+        setShowArchived(true);
+      },
+    );
+  };
+
+  const restoreSelectedExercise = () => {
+    if (!selectedExercise?.isCustom) return;
+    setExerciseArchived(selectedExercise.id, false);
+    setSelectedExerciseId(null);
+    showPrototypeNotice(
+      'Exercise restored',
+      `${selectedExercise.name} is available for workouts and templates again.`,
+    );
+  };
+
+  const permanentlyDeleteSelectedExercise = () => {
+    if (!selectedExercise?.isCustom || !selectedExercise.archived) return;
+
+    if (hasUsage(selectedUsage)) {
+      showPrototypeNotice(
+        'Exercise is still in use',
+        `${usageSummary(selectedUsage)} LiftFlow will keep it archived so your templates and recorded workouts stay intact.`,
+      );
+      return;
+    }
+
+    confirmAction(
+      `Delete ${selectedExercise.name} permanently?`,
+      'This cannot be undone. The exercise is not used by any template, active workout, or completed workout.',
+      'Delete Permanently',
+      () => {
+        const deleted = deleteExercise(selectedExercise.id);
+        if (!deleted) {
+          showPrototypeNotice(
+            'Exercise was not deleted',
+            'LiftFlow detected a usage or safety conflict. Keep it archived instead.',
+          );
+          return;
+        }
+        setSelectedExerciseId(null);
+      },
+    );
   };
 
   return (
@@ -128,7 +262,7 @@ export default function ExercisesScreen() {
           <ExerciseSection
             title="My Exercises"
             exercises={customExercises}
-            onSelect={setSelectedExercise}
+            onSelect={(exercise) => setSelectedExerciseId(exercise.id)}
           />
         ) : null}
 
@@ -136,7 +270,7 @@ export default function ExercisesScreen() {
           <ExerciseSection
             title="Favorites"
             exercises={favorites}
-            onSelect={setSelectedExercise}
+            onSelect={(exercise) => setSelectedExerciseId(exercise.id)}
           />
         ) : null}
 
@@ -144,7 +278,7 @@ export default function ExercisesScreen() {
           <ExerciseSection
             title="Recently used"
             exercises={recent}
-            onSelect={setSelectedExercise}
+            onSelect={(exercise) => setSelectedExerciseId(exercise.id)}
           />
         ) : null}
 
@@ -154,7 +288,7 @@ export default function ExercisesScreen() {
               <ExerciseRow
                 key={exercise.id}
                 exercise={exercise}
-                onPress={() => setSelectedExercise(exercise)}
+                onPress={() => setSelectedExerciseId(exercise.id)}
               />
             ))
           ) : (
@@ -176,19 +310,53 @@ export default function ExercisesScreen() {
             </View>
           )}
         </SectionCard>
+
+        {archivedExercises.length > 0 ? (
+          <>
+            <PrimaryButton
+              label={`${showArchived ? 'Hide' : 'Show'} Archived Exercises (${archivedExercises.length})`}
+              variant="secondary"
+              onPress={() => setShowArchived((current) => !current)}
+            />
+            {showArchived ? (
+              <ExerciseSection
+                title="Archived Exercises"
+                exercises={archivedExercises}
+                onSelect={(exercise) => setSelectedExerciseId(exercise.id)}
+              />
+            ) : null}
+          </>
+        ) : null}
       </ScrollView>
 
       <ExerciseDetailModal
         exercise={selectedExercise}
+        usage={selectedUsage}
         hasActiveWorkout={Boolean(workout)}
-        onClose={() => setSelectedExercise(null)}
+        onClose={() => setSelectedExerciseId(null)}
         onAdd={() => selectedExercise && addToWorkout(selectedExercise)}
+        onEdit={() => {
+          if (!selectedExercise?.isCustom) return;
+          setEditingExerciseId(selectedExercise.id);
+          setSelectedExerciseId(null);
+        }}
+        onArchive={archiveSelectedExercise}
+        onRestore={restoreSelectedExercise}
+        onDelete={permanentlyDeleteSelectedExercise}
       />
 
-      <CreateExerciseModal
+      <ExerciseFormModal
         visible={createVisible}
+        exercise={null}
         onClose={() => setCreateVisible(false)}
         onSave={saveExercise}
+      />
+
+      <ExerciseFormModal
+        visible={Boolean(editingExercise)}
+        exercise={editingExercise}
+        onClose={() => setEditingExerciseId(null)}
+        onSave={saveEditedExercise}
       />
     </>
   );
@@ -238,6 +406,7 @@ function ExerciseRow({
         <Text style={styles.exerciseDetail}>
           {exercise.detail}
           {exercise.isCustom ? ' · Custom' : ''}
+          {exercise.archived ? ' · Archived' : ''}
         </Text>
       </View>
       <Text style={styles.chevron}>›</Text>
@@ -271,47 +440,117 @@ function FilterChip({
 
 function ExerciseDetailModal({
   exercise,
+  usage,
   hasActiveWorkout,
   onClose,
   onAdd,
+  onEdit,
+  onArchive,
+  onRestore,
+  onDelete,
 }: {
   exercise: ExerciseDefinition | null;
+  usage: ExerciseUsage;
   hasActiveWorkout: boolean;
   onClose: () => void;
   onAdd: () => void;
+  onEdit: () => void;
+  onArchive: () => void;
+  onRestore: () => void;
+  onDelete: () => void;
 }) {
+  const used = hasUsage(usage);
+
   return (
     <Modal transparent visible={Boolean(exercise)} animationType="fade" onRequestClose={onClose}>
       <View style={styles.modalBackdrop}>
         <View style={styles.modalCard}>
-          {exercise ? (
-            <>
-              <Text style={styles.modalTitle}>{exercise.name}</Text>
-              <Text style={styles.modalSubtitle}>{exercise.detail}</Text>
-              <View style={styles.detailGrid}>
-                <Detail label="Primary muscle" value={exercise.primaryMuscle} />
-                <Detail label="Equipment" value={exercise.equipment} />
-                <Detail label="Tracking" value={exercise.exerciseType} />
-              </View>
-              <PrimaryButton
-                label={hasActiveWorkout ? 'Add to Active Workout' : 'Start a Workout First'}
-                onPress={onAdd}
-              />
-              <PrimaryButton label="Close" onPress={onClose} variant="secondary" />
-            </>
-          ) : null}
+          <ScrollView
+            style={styles.detailScroll}
+            contentContainerStyle={styles.detailContent}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            {exercise ? (
+              <>
+                <View style={styles.titleRow}>
+                  <Text style={styles.modalTitle}>{exercise.name}</Text>
+                  {exercise.archived ? <Text style={styles.archivedBadge}>Archived</Text> : null}
+                </View>
+                <Text style={styles.modalSubtitle}>{exercise.detail}</Text>
+
+                <View style={styles.detailGrid}>
+                  <Detail label="Primary muscle" value={exercise.primaryMuscle} />
+                  <Detail label="Equipment" value={exercise.equipment} />
+                  <Detail label="Tracking" value={exercise.exerciseType} />
+                  <Detail label="Default reps" value={String(exercise.defaultReps ?? 8)} />
+                  {exercise.exerciseType === 'Weight & Reps' ? (
+                    <Detail
+                      label="Default weight"
+                      value={
+                        exercise.defaultWeight === undefined
+                          ? 'Not set'
+                          : String(exercise.defaultWeight)
+                      }
+                    />
+                  ) : null}
+                </View>
+
+                {exercise.isCustom ? (
+                  <View style={styles.usageBox}>
+                    <Text style={styles.usageTitle}>Data safety</Text>
+                    <Text style={styles.usageCopy}>
+                      {used
+                        ? usageSummary(usage)
+                        : 'Not currently used by a template, active workout, or completed workout.'}
+                    </Text>
+                  </View>
+                ) : null}
+
+                {!exercise.archived && hasActiveWorkout ? (
+                  <PrimaryButton label="Add to Active Workout" onPress={onAdd} />
+                ) : !exercise.archived ? (
+                  <View style={styles.noWorkoutNotice}>
+                    <Text style={styles.noWorkoutTitle}>No active workout</Text>
+                    <Text style={styles.noWorkoutCopy}>
+                      Start or resume a workout to add this exercise. You can still view its
+                      details here.
+                    </Text>
+                  </View>
+                ) : null}
+
+                {exercise.isCustom ? (
+                  <View style={styles.managementActions}>
+                    <PrimaryButton label="Edit Exercise" onPress={onEdit} variant="secondary" />
+                    {exercise.archived ? (
+                      <PrimaryButton label="Restore Exercise" onPress={onRestore} />
+                    ) : (
+                      <PrimaryButton label="Archive Exercise" onPress={onArchive} variant="danger" />
+                    )}
+                    {exercise.archived && !used ? (
+                      <PrimaryButton label="Delete Permanently" onPress={onDelete} variant="danger" />
+                    ) : null}
+                  </View>
+                ) : null}
+
+                <PrimaryButton label="Close" onPress={onClose} variant="secondary" />
+              </>
+            ) : null}
+          </ScrollView>
         </View>
       </View>
     </Modal>
   );
 }
 
-function CreateExerciseModal({
+function ExerciseFormModal({
   visible,
+  exercise,
   onClose,
   onSave,
 }: {
   visible: boolean;
+  exercise: ExerciseDefinition | null;
   onClose: () => void;
   onSave: (input: CreateExerciseInput) => boolean;
 }) {
@@ -322,15 +561,17 @@ function CreateExerciseModal({
   const [defaultWeight, setDefaultWeight] = useState('');
   const [defaultReps, setDefaultReps] = useState('8');
 
-  const closeAndReset = () => {
-    setName('');
-    setPrimaryMuscle('Other');
-    setEquipment('Other');
-    setExerciseType('Weight & Reps');
-    setDefaultWeight('');
-    setDefaultReps('8');
-    onClose();
-  };
+  useEffect(() => {
+    if (!visible) return;
+    setName(exercise?.name ?? '');
+    setPrimaryMuscle(exercise?.primaryMuscle ?? 'Other');
+    setEquipment(exercise?.equipment ?? 'Other');
+    setExerciseType(exercise?.exerciseType ?? 'Weight & Reps');
+    setDefaultWeight(
+      exercise?.defaultWeight === undefined ? '' : String(exercise.defaultWeight),
+    );
+    setDefaultReps(String(exercise?.defaultReps ?? 8));
+  }, [exercise, visible]);
 
   const submit = () => {
     if (!name.trim()) {
@@ -363,18 +604,16 @@ function CreateExerciseModal({
       defaultReps: reps,
     });
 
-    if (saved) closeAndReset();
+    if (saved) onClose();
   };
 
   return (
-    <KeyboardAwareModal
-      visible={visible}
-      onClose={closeAndReset}
-      cardStyle={styles.formModalCard}
-    >
-      <Text style={styles.modalTitle}>Create Exercise</Text>
+    <KeyboardAwareModal visible={visible} onClose={onClose} cardStyle={styles.formModalCard}>
+      <Text style={styles.modalTitle}>{exercise ? 'Edit Exercise' : 'Create Exercise'}</Text>
       <Text style={styles.formHelp}>
-        Add your own movement and use it in workouts and templates immediately.
+        {exercise
+          ? 'Update the exercise defaults used when it is added to future workouts and templates.'
+          : 'Add your own movement and use it in workouts and templates immediately.'}
       </Text>
 
       <FormField
@@ -429,8 +668,8 @@ function CreateExerciseModal({
         keyboardType="number-pad"
       />
 
-      <PrimaryButton label="Create Exercise" onPress={submit} />
-      <PrimaryButton label="Cancel" onPress={closeAndReset} variant="secondary" />
+      <PrimaryButton label={exercise ? 'Save Changes' : 'Create Exercise'} onPress={submit} />
+      <PrimaryButton label="Cancel" onPress={onClose} variant="secondary" />
     </KeyboardAwareModal>
   );
 }
@@ -481,6 +720,43 @@ function Detail({ label, value }: { label: string; value: string }) {
 function nextOption<T extends string>(options: readonly T[], current: T): T {
   const currentIndex = options.indexOf(current);
   return options[(currentIndex + 1) % options.length];
+}
+
+function hasUsage(usage: ExerciseUsage) {
+  return usage.templates > 0 || usage.completedWorkouts > 0 || usage.activeWorkout;
+}
+
+function usageSummary(usage: ExerciseUsage) {
+  const parts: string[] = [];
+  if (usage.templates > 0) {
+    parts.push(`${usage.templates} template${usage.templates === 1 ? '' : 's'}`);
+  }
+  if (usage.completedWorkouts > 0) {
+    parts.push(
+      `${usage.completedWorkouts} completed workout${usage.completedWorkouts === 1 ? '' : 's'}`,
+    );
+  }
+  if (usage.activeWorkout) parts.push('the active workout');
+
+  return `Used by ${parts.join(', ')}. Archiving is safe, but permanent deletion is blocked.`;
+}
+
+function confirmAction(
+  title: string,
+  message: string,
+  confirmLabel: string,
+  onConfirm: () => void,
+) {
+  if (Platform.OS === 'web') {
+    const confirmFunction = (globalThis as { confirm?: (value: string) => boolean }).confirm;
+    if (confirmFunction?.(`${title}\n\n${message}`)) onConfirm();
+    return;
+  }
+
+  Alert.alert(title, message, [
+    { text: 'Cancel', style: 'cancel' },
+    { text: confirmLabel, style: 'destructive', onPress: onConfirm },
+  ]);
 }
 
 const styles = StyleSheet.create({
@@ -563,27 +839,52 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     backgroundColor: 'rgba(0, 0, 0, 0.72)',
-    padding: spacing.lg,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xl,
   },
   modalCard: {
     width: '100%',
     maxWidth: 480,
-    maxHeight: '92%',
+    maxHeight: '84%',
     alignSelf: 'center',
+    overflow: 'hidden',
     backgroundColor: colors.surface,
     borderColor: colors.border,
     borderWidth: 1,
     borderRadius: radius.lg,
-    padding: spacing.lg,
-    gap: spacing.md,
+  },
+  detailScroll: {
+    width: '100%',
+  },
+  detailContent: {
+    padding: spacing.md,
+    paddingBottom: spacing.lg,
+    gap: spacing.sm,
   },
   formModalCard: {
     maxWidth: 480,
   },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
   modalTitle: {
+    flexShrink: 1,
     color: colors.text,
     fontSize: 25,
     fontWeight: '900',
+  },
+  archivedBadge: {
+    color: colors.background,
+    backgroundColor: colors.textMuted,
+    borderRadius: radius.pill,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    fontSize: 11,
+    fontWeight: '900',
+    textTransform: 'uppercase',
   },
   modalSubtitle: {
     color: colors.primary,
@@ -615,9 +916,13 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   detailGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: spacing.sm,
   },
   detailItem: {
+    minWidth: '47%',
+    flexGrow: 1,
     backgroundColor: colors.surfaceElevated,
     borderRadius: radius.sm,
     padding: spacing.sm,
@@ -633,5 +938,45 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '800',
     marginTop: 3,
+  },
+  usageBox: {
+    backgroundColor: colors.surfaceElevated,
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    gap: 5,
+  },
+  usageTitle: {
+    color: colors.text,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  usageCopy: {
+    color: colors.textMuted,
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  noWorkoutNotice: {
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: radius.md,
+    backgroundColor: colors.surfaceElevated,
+    padding: spacing.md,
+    gap: 4,
+  },
+  noWorkoutTitle: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  noWorkoutCopy: {
+    color: colors.textMuted,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  managementActions: {
+    gap: spacing.sm,
+    paddingTop: spacing.xs,
   },
 });

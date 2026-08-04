@@ -1,7 +1,9 @@
 import { useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
 import {
+  Alert,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -37,12 +39,19 @@ export default function WorkoutsScreen() {
     createExercise,
     createTemplate,
     updateTemplate,
+    deleteTemplate,
     startWorkout,
     workout,
   } = useActiveWorkout();
   const [selectedTemplate, setSelectedTemplate] = useState<WorkoutTemplate | null>(null);
   const [createVisible, setCreateVisible] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<WorkoutTemplate | null>(null);
+  const [templateActions, setTemplateActions] = useState<WorkoutTemplate | null>(null);
+
+  const availableExercises = useMemo(
+    () => exercises.filter((exercise) => !exercise.archived),
+    [exercises],
+  );
 
   const begin = (template: WorkoutTemplate) => {
     if (workout) {
@@ -142,6 +151,34 @@ export default function WorkoutsScreen() {
     return true;
   };
 
+  const editTemplate = (template: WorkoutTemplate) => {
+    setTemplateActions(null);
+    setSelectedTemplate(null);
+    setEditingTemplate(template);
+  };
+
+  const removeTemplate = (template: WorkoutTemplate) => {
+    confirmAction(
+      `Delete ${template.name}?`,
+      'This removes only the saved template. Your custom exercises, active workout, and completed workout history will not be deleted.',
+      'Delete Template',
+      () => {
+        const deleted = deleteTemplate(template.id);
+        if (!deleted) {
+          showPrototypeNotice(
+            'Template was not deleted',
+            'LiftFlow could not find that template. Reload the app and try again.',
+          );
+          return;
+        }
+
+        if (selectedTemplate?.id === template.id) setSelectedTemplate(null);
+        if (editingTemplate?.id === template.id) setEditingTemplate(null);
+        setTemplateActions(null);
+      },
+    );
+  };
+
   const recentTemplates = templates.slice(-2).reverse();
   const folders = Array.from(new Set(templates.map((template) => template.folder)));
 
@@ -157,6 +194,7 @@ export default function WorkoutsScreen() {
                 key={`recent-${template.id}`}
                 template={template}
                 onPreview={() => setSelectedTemplate(template)}
+                onManage={() => setTemplateActions(template)}
                 onStart={() => begin(template)}
               />
             ))}
@@ -172,6 +210,7 @@ export default function WorkoutsScreen() {
                   key={template.id}
                   template={template}
                   onPreview={() => setSelectedTemplate(template)}
+                  onManage={() => setTemplateActions(template)}
                   onStart={() => begin(template)}
                 />
               ))}
@@ -199,15 +238,24 @@ export default function WorkoutsScreen() {
         template={selectedTemplate}
         onClose={() => setSelectedTemplate(null)}
         onStart={() => selectedTemplate && begin(selectedTemplate)}
-        onEdit={() => {
-          if (!selectedTemplate) return;
-          setEditingTemplate(selectedTemplate);
-          setSelectedTemplate(null);
+        onEdit={() => selectedTemplate && editTemplate(selectedTemplate)}
+        onDelete={() => selectedTemplate && removeTemplate(selectedTemplate)}
+      />
+
+      <TemplateActionsModal
+        template={templateActions}
+        onClose={() => setTemplateActions(null)}
+        onPreview={() => {
+          if (!templateActions) return;
+          setSelectedTemplate(templateActions);
+          setTemplateActions(null);
         }}
+        onEdit={() => templateActions && editTemplate(templateActions)}
+        onDelete={() => templateActions && removeTemplate(templateActions)}
       />
 
       <CreateTemplateModal
-        exercises={exercises}
+        exercises={availableExercises}
         visible={createVisible}
         onClose={() => setCreateVisible(false)}
         onCreateExercise={saveExercise}
@@ -215,7 +263,7 @@ export default function WorkoutsScreen() {
       />
 
       <TemplateEditorModal
-        exercises={exercises}
+        exercises={availableExercises}
         template={editingTemplate}
         onClose={() => setEditingTemplate(null)}
         onSave={saveUpdatedTemplate}
@@ -227,10 +275,12 @@ export default function WorkoutsScreen() {
 function WorkoutRow({
   template,
   onPreview,
+  onManage,
   onStart,
 }: {
   template: WorkoutTemplate;
   onPreview: () => void;
+  onManage: () => void;
   onStart: () => void;
 }) {
   return (
@@ -245,6 +295,15 @@ function WorkoutRow({
         <Text style={styles.workoutDetail}>{template.detail}</Text>
         <Text style={styles.previewHint}>Tap for preview</Text>
       </Pressable>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Manage ${template.name}`}
+        onPress={onManage}
+        hitSlop={8}
+        style={({ pressed }) => [styles.manageButton, pressed && styles.pressed]}
+      >
+        <Text style={styles.manageButtonLabel}>•••</Text>
+      </Pressable>
       <PrimaryButton label="Start" onPress={onStart} style={styles.startButton} />
     </View>
   );
@@ -255,11 +314,13 @@ function TemplatePreviewModal({
   onClose,
   onStart,
   onEdit,
+  onDelete,
 }: {
   template: WorkoutTemplate | null;
   onClose: () => void;
   onStart: () => void;
   onEdit: () => void;
+  onDelete: () => void;
 }) {
   return (
     <Modal transparent visible={Boolean(template)} animationType="fade" onRequestClose={onClose}>
@@ -286,11 +347,45 @@ function TemplatePreviewModal({
 
               <PrimaryButton label="Edit Template" onPress={onEdit} variant="secondary" />
               <PrimaryButton label="Start Workout" onPress={onStart} />
+              <PrimaryButton label="Delete Template" onPress={onDelete} variant="danger" />
               <PrimaryButton label="Close" onPress={onClose} variant="secondary" />
             </>
           ) : null}
         </View>
       </View>
+    </Modal>
+  );
+}
+
+function TemplateActionsModal({
+  template,
+  onClose,
+  onPreview,
+  onEdit,
+  onDelete,
+}: {
+  template: WorkoutTemplate | null;
+  onClose: () => void;
+  onPreview: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <Modal transparent visible={Boolean(template)} animationType="fade" onRequestClose={onClose}>
+      <Pressable style={styles.modalBackdrop} onPress={onClose}>
+        <Pressable style={styles.actionsCard} onPress={(event) => event.stopPropagation()}>
+          {template ? (
+            <>
+              <Text style={styles.actionsTitle}>{template.name}</Text>
+              <Text style={styles.actionsSubtitle}>{template.folder}</Text>
+              <PrimaryButton label="Preview Template" onPress={onPreview} variant="secondary" />
+              <PrimaryButton label="Edit Template" onPress={onEdit} />
+              <PrimaryButton label="Delete Template" onPress={onDelete} variant="danger" />
+              <PrimaryButton label="Cancel" onPress={onClose} variant="secondary" />
+            </>
+          ) : null}
+        </Pressable>
+      </Pressable>
     </Modal>
   );
 }
@@ -1154,6 +1249,24 @@ function getEmptyWorkoutName() {
   return 'Evening Workout';
 }
 
+function confirmAction(
+  title: string,
+  message: string,
+  confirmLabel: string,
+  onConfirm: () => void,
+) {
+  if (Platform.OS === 'web') {
+    const confirmFunction = (globalThis as { confirm?: (value: string) => boolean }).confirm;
+    if (confirmFunction?.(`${title}\n\n${message}`)) onConfirm();
+    return;
+  }
+
+  Alert.alert(title, message, [
+    { text: 'Cancel', style: 'cancel' },
+    { text: confirmLabel, style: 'destructive', onPress: onConfirm },
+  ]);
+}
+
 const styles = StyleSheet.create({
   content: {
     padding: spacing.md,
@@ -1192,8 +1305,25 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     marginTop: 4,
   },
+  manageButton: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radius.sm,
+    borderColor: colors.border,
+    borderWidth: 1,
+    backgroundColor: colors.surfaceElevated,
+  },
+  manageButtonLabel: {
+    color: colors.text,
+    fontSize: 18,
+    fontWeight: '900',
+    letterSpacing: 1,
+    marginTop: -5,
+  },
   startButton: {
-    minHeight: 38,
+    minHeight: 40,
     minWidth: 70,
   },
   modalBackdrop: {
@@ -1213,6 +1343,28 @@ const styles = StyleSheet.create({
     borderRadius: radius.lg,
     padding: spacing.lg,
     gap: spacing.md,
+  },
+  actionsCard: {
+    width: '100%',
+    maxWidth: 420,
+    alignSelf: 'center',
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
+    gap: spacing.sm,
+  },
+  actionsTitle: {
+    color: colors.text,
+    fontSize: 22,
+    fontWeight: '900',
+  },
+  actionsSubtitle: {
+    color: colors.primary,
+    fontSize: 13,
+    fontWeight: '800',
+    marginBottom: spacing.xs,
   },
   modalTitle: {
     color: colors.text,

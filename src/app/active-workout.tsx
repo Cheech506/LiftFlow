@@ -61,6 +61,11 @@ export default function ActiveWorkoutScreen() {
   const [exercisePickerOpen, setExercisePickerOpen] = useState(false);
   const [exerciseMenuId, setExerciseMenuId] = useState<string | null>(null);
 
+  const availableExercises = useMemo(
+    () => exercises.filter((exercise) => !exercise.archived),
+    [exercises],
+  );
+
   useEffect(() => {
     const interval = setInterval(() => {
       setNow(Date.now());
@@ -226,7 +231,7 @@ export default function ActiveWorkoutScreen() {
       />
 
       <ExercisePickerModal
-        exercises={exercises}
+        exercises={availableExercises}
         visible={exercisePickerOpen}
         addedExerciseNames={workout.exercises.map((exercise) => exercise.name)}
         onClose={() => setExercisePickerOpen(false)}

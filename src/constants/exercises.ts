@@ -12,6 +12,8 @@ export type ExerciseDefinition = {
   favorite?: boolean;
   recent?: boolean;
   isCustom?: boolean;
+  archived?: boolean;
+  previousNames?: string[];
 };
 
 export const exerciseLibrary: ExerciseDefinition[] = [
