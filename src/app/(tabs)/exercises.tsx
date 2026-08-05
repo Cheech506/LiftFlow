@@ -31,6 +31,11 @@ import {
   exerciseTypeUsesReps,
   exerciseTypeUsesWeight,
 } from '@/lib/exerciseTracking';
+import {
+  buildExerciseProgress,
+  formatExerciseHistoryDate,
+  type ExerciseProgressSummary,
+} from '@/lib/exerciseProgress';
 import { showPrototypeNotice } from '@/lib/prototypeNotice';
 
 const muscleOptions = ['All', 'Chest', 'Back', 'Shoulders', 'Quadriceps', 'Hamstrings'];
@@ -48,6 +53,7 @@ export default function ExercisesScreen() {
     setExerciseArchived,
     deleteExercise,
     getExerciseUsage,
+    completedWorkouts,
     restTimerSettings,
   } = useActiveWorkout();
   const [query, setQuery] = useState('');
@@ -101,6 +107,13 @@ export default function ExercisesScreen() {
   const selectedUsage = selectedExercise
     ? getExerciseUsage(selectedExercise.id)
     : emptyUsage;
+  const selectedProgress = useMemo(
+    () =>
+      selectedExercise
+        ? buildExerciseProgress(selectedExercise, completedWorkouts)
+        : null,
+    [completedWorkouts, selectedExercise],
+  );
 
   const addToWorkout = (exercise: ExerciseDefinition) => {
     if (exercise.archived) {
@@ -340,6 +353,7 @@ export default function ExercisesScreen() {
       <ExerciseDetailModal
         exercise={selectedExercise}
         usage={selectedUsage}
+        progress={selectedProgress}
         hasActiveWorkout={Boolean(workout)}
         onClose={() => setSelectedExerciseId(null)}
         onAdd={() => selectedExercise && addToWorkout(selectedExercise)}
@@ -451,6 +465,7 @@ function FilterChip({
 function ExerciseDetailModal({
   exercise,
   usage,
+  progress,
   hasActiveWorkout,
   onClose,
   onAdd,
@@ -461,6 +476,7 @@ function ExerciseDetailModal({
 }: {
   exercise: ExerciseDefinition | null;
   usage: ExerciseUsage;
+  progress: ExerciseProgressSummary | null;
   hasActiveWorkout: boolean;
   onClose: () => void;
   onAdd: () => void;
@@ -528,6 +544,75 @@ function ExerciseDetailModal({
                       label="Default duration"
                       value={`${exercise.defaultDurationSeconds ?? 60} sec`}
                     />
+                  ) : null}
+                </View>
+
+                <View style={styles.performanceSection}>
+                  <View style={styles.performanceTitleRow}>
+                    <Text style={styles.performanceTitle}>Performance</Text>
+                    <Text style={styles.performanceCount}>
+                      {progress?.totalSessions ?? 0} session{progress?.totalSessions === 1 ? '' : 's'} · {progress?.totalCompletedSets ?? 0} completed set{progress?.totalCompletedSets === 1 ? '' : 's'}
+                    </Text>
+                  </View>
+
+                  {progress && progress.records.length > 0 ? (
+                    <View style={styles.recordGrid}>
+                      {progress.records.map((record) => (
+                        <View key={record.key} style={styles.recordCard}>
+                          <Text style={styles.recordLabel}>{record.label.replace(' PR', '')}</Text>
+                          <Text style={styles.recordValue}>{record.displayValue}</Text>
+                          <Text style={styles.recordDate}>
+                            {formatExerciseHistoryDate(record.achievedAt)}
+                          </Text>
+                        </View>
+                      ))}
+                    </View>
+                  ) : (
+                    <View style={styles.emptyPerformance}>
+                      <Text style={styles.emptyPerformanceTitle}>No performance data yet</Text>
+                      <Text style={styles.emptyPerformanceCopy}>
+                        Complete working sets for this exercise and LiftFlow will build records automatically. Warm-up sets do not count toward PRs.
+                      </Text>
+                    </View>
+                  )}
+
+                  {progress && progress.recentPrs.length > 0 ? (
+                    <View style={styles.performanceList}>
+                      <Text style={styles.performanceSubheading}>Recent PRs</Text>
+                      {progress.recentPrs.slice(0, 4).map((pr) => (
+                        <View key={pr.id} style={styles.performanceRow}>
+                          <View style={styles.performanceRowCopy}>
+                            <Text style={styles.performanceRowTitle}>{pr.label}</Text>
+                            <Text style={styles.performanceRowSubtitle}>
+                              {pr.workoutName} · {formatExerciseHistoryDate(pr.achievedAt)}
+                            </Text>
+                          </View>
+                          <Text style={styles.performanceRowValue}>{pr.displayValue}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  ) : null}
+
+                  {progress && progress.recentHistory.length > 0 ? (
+                    <View style={styles.performanceList}>
+                      <Text style={styles.performanceSubheading}>Recent history</Text>
+                      {progress.recentHistory.slice(0, 5).map((entry) => (
+                        <View key={entry.workoutId} style={styles.performanceRow}>
+                          <View style={styles.performanceRowCopy}>
+                            <Text style={styles.performanceRowTitle}>{entry.workoutName}</Text>
+                            <Text style={styles.performanceRowSubtitle}>
+                              {formatExerciseHistoryDate(entry.completedAt)} · {entry.completedSetCount} completed set{entry.completedSetCount === 1 ? '' : 's'}
+                            </Text>
+                          </View>
+                          <View style={styles.performanceRowRight}>
+                            <Text style={styles.performanceRowValue}>{entry.bestSetLabel}</Text>
+                            {entry.totalVolume ? (
+                              <Text style={styles.performanceRowSubtitle}>{Math.round(entry.totalVolume).toLocaleString()} lb volume</Text>
+                            ) : null}
+                          </View>
+                        </View>
+                      ))}
+                    </View>
                   ) : null}
                 </View>
 
@@ -1054,6 +1139,119 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '800',
     marginTop: 3,
+  },
+  performanceSection: {
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+    paddingTop: spacing.md,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+  },
+  performanceTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    flexWrap: 'wrap',
+  },
+  performanceTitle: {
+    color: colors.text,
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  performanceCount: {
+    color: colors.textMuted,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  recordGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  recordCard: {
+    minWidth: '47%',
+    flexGrow: 1,
+    backgroundColor: colors.surfaceElevated,
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: radius.md,
+    padding: spacing.sm,
+    gap: 3,
+  },
+  recordLabel: {
+    color: colors.textMuted,
+    fontSize: 10,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  recordValue: {
+    color: colors.primary,
+    fontSize: 19,
+    fontWeight: '900',
+  },
+  recordDate: {
+    color: colors.textMuted,
+    fontSize: 11,
+  },
+  emptyPerformance: {
+    backgroundColor: colors.surfaceElevated,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    gap: 4,
+  },
+  emptyPerformanceTitle: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  emptyPerformanceCopy: {
+    color: colors.textMuted,
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  performanceList: {
+    gap: 4,
+  },
+  performanceSubheading: {
+    color: colors.textMuted,
+    fontSize: 11,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+    marginTop: spacing.xs,
+  },
+  performanceRow: {
+    minHeight: 58,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+    paddingVertical: spacing.xs,
+  },
+  performanceRowCopy: {
+    flex: 1,
+  },
+  performanceRowRight: {
+    maxWidth: '48%',
+    alignItems: 'flex-end',
+  },
+  performanceRowTitle: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  performanceRowSubtitle: {
+    color: colors.textMuted,
+    fontSize: 11,
+    marginTop: 2,
+  },
+  performanceRowValue: {
+    color: colors.primary,
+    fontSize: 13,
+    fontWeight: '900',
+    textAlign: 'right',
   },
   usageBox: {
     backgroundColor: colors.surfaceElevated,

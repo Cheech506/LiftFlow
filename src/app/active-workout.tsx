@@ -34,6 +34,12 @@ import {
   getMetricSlots,
   type WorkoutMetricField,
 } from '@/lib/exerciseTracking';
+import {
+  buildExerciseProgress,
+  findExerciseDefinition,
+  getSetPrLabels,
+  type ExerciseProgressSummary,
+} from '@/lib/exerciseProgress';
 
 type DialogType = 'finish' | 'discard' | null;
 type SetMenuState = { exerciseId: string; setId: string } | null;
@@ -61,6 +67,7 @@ export default function ActiveWorkoutScreen() {
   const {
     workout,
     exercises,
+    completedWorkouts,
     completedSetCount,
     totalSetCount,
     toggleSet,
@@ -103,6 +110,17 @@ export default function ActiveWorkoutScreen() {
     () => exercises.filter((exercise) => !exercise.archived),
     [exercises],
   );
+
+  const progressByWorkoutExerciseId = useMemo(() => {
+    const entries = (workout?.exercises ?? []).map((workoutExercise) => {
+      const definition = findExerciseDefinition(workoutExercise, exercises);
+      return [
+        workoutExercise.id,
+        definition ? buildExerciseProgress(definition, completedWorkouts) : null,
+      ] as const;
+    });
+    return new Map(entries);
+  }, [completedWorkouts, exercises, workout?.exercises]);
 
   useEffect(() => {
     const interval = setInterval(() => setNow(Date.now()), 1000);
@@ -227,6 +245,7 @@ export default function ActiveWorkoutScreen() {
             <ExerciseCard
               key={exercise.id}
               exercise={exercise}
+              progress={progressByWorkoutExerciseId.get(exercise.id) ?? null}
               onToggle={(setId) => {
                 const set = exercise.sets.find((item) => item.id === setId);
                 toggleSet(exercise.id, setId);
@@ -353,6 +372,7 @@ export default function ActiveWorkoutScreen() {
 
 function ExerciseCard({
   exercise,
+  progress,
   onToggle,
   onUpdateValue,
   onCopyPrevious,
@@ -362,6 +382,7 @@ function ExerciseCard({
   onUpdateNotes,
 }: {
   exercise: WorkoutExercise;
+  progress: ExerciseProgressSummary | null;
   onToggle: (setId: string) => void;
   onUpdateValue: (setId: string, field: WorkoutMetricField, value: number | undefined) => void;
   onCopyPrevious: (setId: string) => void;
@@ -408,7 +429,9 @@ function ExerciseCard({
         <Text style={[styles.columnLabel, styles.doneColumn]}>✓</Text>
       </View>
 
-      {exercise.sets.map((set, index) => (
+      {exercise.sets.map((set, index) => {
+        const prLabels = getSetPrLabels(exercise.exerciseType, set, progress);
+        return (
         <View key={set.id} style={styles.setBlock}>
           <View style={[styles.setRow, set.completed && styles.completedRow]}>
             <Pressable
@@ -443,10 +466,20 @@ function ExerciseCard({
           </View>
           <Pressable onPress={() => onOpenSet(set.id)} style={({ pressed }) => [styles.setMetaRow, pressed && styles.pressed]}>
             <Text style={styles.setMetaText}>{setTypeLabel(set.setType)}</Text>
+            {prLabels.length > 0 ? (
+              <View style={styles.prBadgeRow}>
+                {prLabels.map((label) => (
+                  <View key={`${set.id}-${label}`} style={styles.prBadge}>
+                    <Text style={styles.prBadgeText}>{label}</Text>
+                  </View>
+                ))}
+              </View>
+            ) : null}
             <Text style={styles.setMetaText}>{formatEffort(set)}</Text>
           </Pressable>
         </View>
-      ))}
+        );
+      })}
 
       <Pressable accessibilityRole="button" onPress={onAddSet} style={({ pressed }) => [styles.addSetButton, pressed && styles.pressed]}>
         <Text style={styles.addSetLabel}>+ Add Set</Text>
@@ -793,8 +826,11 @@ const styles = StyleSheet.create({
   checkButtonComplete: { backgroundColor: colors.primary, borderColor: colors.primary },
   checkComplete: { color: colors.background, fontSize: 17, fontWeight: '900' },
   checkEmpty: { color: colors.textMuted },
-  setMetaRow: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 47, paddingBottom: 8 },
+  setMetaRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 6, paddingHorizontal: 47, paddingBottom: 8 },
   setMetaText: { color: colors.textMuted, fontSize: 11, fontWeight: '700' },
+  prBadgeRow: { flex: 1, flexDirection: 'row', justifyContent: 'center', flexWrap: 'wrap', gap: 4 },
+  prBadge: { backgroundColor: 'rgba(100, 217, 139, 0.15)', borderColor: colors.primary, borderWidth: 1, borderRadius: radius.pill, paddingHorizontal: 7, paddingVertical: 3 },
+  prBadgeText: { color: colors.primary, fontSize: 9, fontWeight: '900' },
   addSetButton: { minHeight: 44, alignItems: 'center', justifyContent: 'center', marginTop: spacing.sm, borderRadius: radius.md, backgroundColor: colors.surfaceElevated },
   addSetLabel: { color: colors.primary, fontSize: 14, fontWeight: '900' },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.72)', alignItems: 'center', justifyContent: 'center', padding: spacing.md },
