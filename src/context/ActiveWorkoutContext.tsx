@@ -53,11 +53,17 @@ export type WorkoutExercise = {
   sets: WorkoutSet[];
 };
 
+export type WorkoutFolder = {
+  id: string;
+  name: string;
+};
+
 export type WorkoutTemplate = {
   id: string;
   name: string;
   folder: string;
   detail: string;
+  archived?: boolean;
   exercises: WorkoutExercise[];
 };
 
@@ -84,6 +90,7 @@ export type CompletedWorkout = {
 
 export type LiftFlowStateSnapshot = {
   exercises: ExerciseDefinition[];
+  folders: WorkoutFolder[];
   templates: WorkoutTemplate[];
   activeWorkout: ActiveWorkout | null;
   completedWorkouts: CompletedWorkout[];
@@ -130,6 +137,7 @@ export type UpdateTemplateInput = {
 type ActiveWorkoutContextValue = {
   workout: ActiveWorkout | null;
   exercises: ExerciseDefinition[];
+  folders: WorkoutFolder[];
   templates: WorkoutTemplate[];
   completedWorkouts: CompletedWorkout[];
   completedSetCount: number;
@@ -141,8 +149,16 @@ type ActiveWorkoutContextValue = {
   setExerciseArchived: (exerciseId: string, archived: boolean) => void;
   deleteExercise: (exerciseId: string) => boolean;
   getExerciseUsage: (exerciseId: string) => ExerciseUsage;
+  createFolder: (name: string) => WorkoutFolder | null;
+  renameFolder: (folderId: string, name: string) => boolean;
+  deleteFolder: (folderId: string) => boolean;
+  moveFolder: (folderId: string, direction: MoveDirection) => void;
   createTemplate: (input: CreateTemplateInput) => WorkoutTemplate;
   updateTemplate: (input: UpdateTemplateInput) => WorkoutTemplate | null;
+  duplicateTemplate: (templateId: string) => WorkoutTemplate | null;
+  moveTemplate: (templateId: string, direction: MoveDirection) => void;
+  moveTemplateToFolder: (templateId: string, folderName: string) => boolean;
+  setTemplateArchived: (templateId: string, archived: boolean) => void;
   deleteTemplate: (templateId: string) => boolean;
   startWorkout: (name: string, templateId?: string) => boolean;
   toggleSet: (exerciseId: string, setId: string) => void;
@@ -329,6 +345,12 @@ const initialTemplates: WorkoutTemplate[] = [
   },
 ];
 
+
+const initialFolders: WorkoutFolder[] = [
+  { id: 'upper-lower', name: 'Upper / Lower' },
+  { id: 'push-pull-legs', name: 'Push Pull Legs' },
+];
+
 const cloneExercises = (exercises: WorkoutExercise[]): WorkoutExercise[] =>
   exercises.map((exercise) => ({
     ...exercise,
@@ -375,6 +397,11 @@ function toId(value: string) {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 }
 
+function canonicalFolderName(folders: WorkoutFolder[], requested: string) {
+  const trimmed = requested.trim() || 'My Workouts';
+  return folders.find((folder) => folder.name.toLowerCase() === trimmed.toLowerCase())?.name ?? trimmed;
+}
+
 function getTemplateDetail(exercises: WorkoutExercise[]) {
   const setCount = exercises.reduce((total, exercise) => total + exercise.sets.length, 0);
   return `${exercises.length} exercise${exercises.length === 1 ? '' : 's'} · ${setCount} planned sets`;
@@ -391,6 +418,7 @@ function moveItem<T>(items: T[], index: number, direction: MoveDirection) {
 export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
   const [workout, setWorkout] = useState<ActiveWorkout | null>(null);
   const [exercises, setExercises] = useState<ExerciseDefinition[]>(exerciseLibrary);
+  const [folders, setFolders] = useState<WorkoutFolder[]>(initialFolders);
   const [templates, setTemplates] = useState<WorkoutTemplate[]>(initialTemplates);
   const [completedWorkouts, setCompletedWorkouts] = useState<CompletedWorkout[]>([]);
   const [isHydrated, setIsHydrated] = useState(false);
@@ -406,6 +434,7 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
         if (cancelled) return;
         if (savedState) {
           setExercises(savedState.exercises);
+          setFolders(savedState.folders);
           setTemplates(savedState.templates);
           setWorkout(savedState.activeWorkout);
           setCompletedWorkouts(savedState.completedWorkouts);
@@ -428,7 +457,7 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     setPersistenceStatus('saving');
     saveTimerRef.current = setTimeout(() => {
-      void saveLiftFlowState({ exercises, templates, activeWorkout: workout, completedWorkouts })
+      void saveLiftFlowState({ exercises, folders, templates, activeWorkout: workout, completedWorkouts })
         .then(() => { setPersistenceStatus('saved'); setLastSavedAt(Date.now()); })
         .catch((error: unknown) => {
           console.error('Unable to save LiftFlow local data.', error);
@@ -436,7 +465,7 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
         });
     }, 150);
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
-  }, [completedWorkouts, exercises, isHydrated, templates, workout]);
+  }, [completedWorkouts, exercises, folders, isHydrated, templates, workout]);
 
   const createExercise = useCallback((input: CreateExerciseInput) => {
     const trimmedName = input.name.trim();
@@ -541,6 +570,39 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
     return true;
   }, [exercises, getExerciseUsage]);
 
+  const createFolder = useCallback((name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return null;
+    if (folders.some((folder) => folder.name.toLowerCase() === trimmed.toLowerCase())) return null;
+    const folder: WorkoutFolder = { id: `${toId(trimmed) || 'folder'}-${Date.now()}`, name: trimmed };
+    setFolders((current) => [...current, folder]);
+    return folder;
+  }, [folders]);
+
+  const renameFolder = useCallback((folderId: string, name: string) => {
+    const trimmed = name.trim();
+    const existing = folders.find((folder) => folder.id === folderId);
+    if (!existing || !trimmed) return false;
+    if (folders.some((folder) => folder.id !== folderId && folder.name.toLowerCase() === trimmed.toLowerCase())) return false;
+    setFolders((current) => current.map((folder) => folder.id === folderId ? { ...folder, name: trimmed } : folder));
+    setTemplates((current) => current.map((template) => template.folder === existing.name ? { ...template, folder: trimmed } : template));
+    return true;
+  }, [folders]);
+
+  const deleteFolder = useCallback((folderId: string) => {
+    const folder = folders.find((item) => item.id === folderId);
+    if (!folder || templates.some((template) => template.folder === folder.name)) return false;
+    setFolders((current) => current.filter((item) => item.id !== folderId));
+    return true;
+  }, [folders, templates]);
+
+  const moveFolder = useCallback((folderId: string, direction: MoveDirection) => {
+    setFolders((current) => {
+      const index = current.findIndex((folder) => folder.id === folderId);
+      return moveItem(current, index, direction);
+    });
+  }, []);
+
   const createTemplate = useCallback((input: CreateTemplateInput) => {
     const templateId = `${toId(input.name) || 'template'}-${Date.now()}`;
     const selected = input.exerciseIds
@@ -560,13 +622,16 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
     const template: WorkoutTemplate = {
       id: templateId,
       name: input.name.trim(),
-      folder: input.folder.trim() || 'My Workouts',
+      folder: canonicalFolderName(folders, input.folder),
       detail: getTemplateDetail(templateExercises),
       exercises: templateExercises,
     };
+    setFolders((current) => current.some((folder) => folder.name.toLowerCase() === template.folder.toLowerCase())
+      ? current
+      : [...current, { id: `${toId(template.folder) || 'folder'}-${Date.now()}`, name: template.folder }]);
     setTemplates((current) => [...current, template]);
     return template;
-  }, [exercises]);
+  }, [exercises, folders]);
 
   const updateTemplate = useCallback((input: UpdateTemplateInput) => {
     const name = input.name.trim();
@@ -585,9 +650,72 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
         })),
       };
     });
-    const updated: WorkoutTemplate = { id: input.id, name, folder: input.folder.trim() || 'My Workouts', detail: getTemplateDetail(normalized), exercises: normalized };
-    setTemplates((current) => current.map((template) => template.id === input.id ? updated : template));
+    const updated: WorkoutTemplate = { id: input.id, name, folder: canonicalFolderName(folders, input.folder), detail: getTemplateDetail(normalized), exercises: normalized };
+    setFolders((current) => current.some((folder) => folder.name.toLowerCase() === updated.folder.toLowerCase())
+      ? current
+      : [...current, { id: `${toId(updated.folder) || 'folder'}-${Date.now()}`, name: updated.folder }]);
+    setTemplates((current) => current.map((template) => template.id === input.id ? { ...updated, archived: template.archived } : template));
     return updated;
+  }, [folders]);
+
+  const duplicateTemplate = useCallback((templateId: string) => {
+    const source = templates.find((template) => template.id === templateId);
+    if (!source) return null;
+    const stamp = Date.now();
+    const duplicate: WorkoutTemplate = {
+      ...source,
+      id: `${toId(source.name) || 'template'}-copy-${stamp}`,
+      name: `${source.name} Copy`,
+      archived: false,
+      exercises: source.exercises.map((exercise, exerciseIndex) => ({
+        ...exercise,
+        id: `${exercise.id}-copy-${stamp}-${exerciseIndex}`,
+        sets: exercise.sets.map((set, setIndex) => ({
+          ...set,
+          id: `${set.id}-copy-${stamp}-${setIndex}`,
+          completed: false,
+        })),
+      })),
+    };
+    setTemplates((current) => {
+      const sourceIndex = current.findIndex((template) => template.id === templateId);
+      const next = [...current];
+      next.splice(sourceIndex + 1, 0, duplicate);
+      return next;
+    });
+    return duplicate;
+  }, [templates]);
+
+  const moveTemplate = useCallback((templateId: string, direction: MoveDirection) => {
+    setTemplates((current) => {
+      const source = current.find((template) => template.id === templateId);
+      if (!source) return current;
+      const peers = current.filter((template) => template.folder === source.folder && Boolean(template.archived) === Boolean(source.archived));
+      const peerIndex = peers.findIndex((template) => template.id === templateId);
+      const targetPeerIndex = direction === 'up' ? peerIndex - 1 : peerIndex + 1;
+      if (targetPeerIndex < 0 || targetPeerIndex >= peers.length) return current;
+      const targetId = peers[targetPeerIndex].id;
+      const sourceIndex = current.findIndex((template) => template.id === templateId);
+      const targetIndex = current.findIndex((template) => template.id === targetId);
+      const next = [...current];
+      [next[sourceIndex], next[targetIndex]] = [next[targetIndex], next[sourceIndex]];
+      return next;
+    });
+  }, []);
+
+  const moveTemplateToFolder = useCallback((templateId: string, folderName: string) => {
+    const trimmed = folderName.trim();
+    if (!trimmed || !templates.some((template) => template.id === templateId)) return false;
+    const targetName = canonicalFolderName(folders, trimmed);
+    setFolders((current) => current.some((folder) => folder.name.toLowerCase() === targetName.toLowerCase())
+      ? current
+      : [...current, { id: `${toId(targetName) || 'folder'}-${Date.now()}`, name: targetName }]);
+    setTemplates((current) => current.map((template) => template.id === templateId ? { ...template, folder: targetName } : template));
+    return true;
+  }, [folders, templates]);
+
+  const setTemplateArchived = useCallback((templateId: string, archived: boolean) => {
+    setTemplates((current) => current.map((template) => template.id === templateId ? { ...template, archived } : template));
   }, []);
 
   const deleteTemplate = useCallback((templateId: string) => {
@@ -739,20 +867,24 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
     const template: WorkoutTemplate = {
       id: `${toId(completed.name) || 'history-template'}-${stamp}`,
       name: `${completed.name} Copy`,
-      folder: completed.sourceFolder || 'From History',
+      folder: canonicalFolderName(folders, completed.sourceFolder || 'From History'),
       detail: getTemplateDetail(completed.exercises),
       exercises: completed.exercises.map((exercise, exerciseIndex) => ({ ...exercise, id: `${exercise.id}-template-${stamp}-${exerciseIndex}`, sets: exercise.sets.map((set, setIndex) => ({ ...set, id: `${set.id}-template-${stamp}-${setIndex}`, previousWeight: undefined, previousReps: undefined, previousDurationSeconds: undefined, previousDistance: undefined, completed: false })) })),
     };
+    setFolders((current) => current.some((folder) => folder.name.toLowerCase() === template.folder.toLowerCase())
+      ? current
+      : [...current, { id: `${toId(template.folder) || 'folder'}-${Date.now()}`, name: template.folder }]);
     setTemplates((current) => [...current, template]);
     return template;
-  }, [completedWorkouts]);
+  }, [completedWorkouts, folders]);
 
-  const getStateSnapshot = useCallback((): LiftFlowStateSnapshot => ({ exercises: exercises.map((item) => ({ ...item })), templates: templates.map((item) => ({ ...item, exercises: cloneExercises(item.exercises) })), activeWorkout: workout ? { ...workout, exercises: cloneExercises(workout.exercises) } : null, completedWorkouts: completedWorkouts.map((item) => ({ ...item, exercises: cloneExercises(item.exercises) })) }), [completedWorkouts, exercises, templates, workout]);
+  const getStateSnapshot = useCallback((): LiftFlowStateSnapshot => ({ exercises: exercises.map((item) => ({ ...item })), folders: folders.map((item) => ({ ...item })), templates: templates.map((item) => ({ ...item, exercises: cloneExercises(item.exercises) })), activeWorkout: workout ? { ...workout, exercises: cloneExercises(workout.exercises) } : null, completedWorkouts: completedWorkouts.map((item) => ({ ...item, exercises: cloneExercises(item.exercises) })) }), [completedWorkouts, exercises, folders, templates, workout]);
 
   const restoreState = useCallback(async (snapshot: LiftFlowStateSnapshot) => {
-    const safe: LiftFlowStateSnapshot = { exercises: snapshot.exercises.map((item) => ({ ...item })), templates: snapshot.templates.map((item) => ({ ...item, exercises: cloneExercises(item.exercises) })), activeWorkout: snapshot.activeWorkout ? { ...snapshot.activeWorkout, exercises: cloneExercises(snapshot.activeWorkout.exercises) } : null, completedWorkouts: snapshot.completedWorkouts.map((item) => ({ ...item, exercises: cloneExercises(item.exercises) })) };
+    const safe: LiftFlowStateSnapshot = { exercises: snapshot.exercises.map((item) => ({ ...item })), folders: snapshot.folders.map((item) => ({ ...item })), templates: snapshot.templates.map((item) => ({ ...item, exercises: cloneExercises(item.exercises) })), activeWorkout: snapshot.activeWorkout ? { ...snapshot.activeWorkout, exercises: cloneExercises(snapshot.activeWorkout.exercises) } : null, completedWorkouts: snapshot.completedWorkouts.map((item) => ({ ...item, exercises: cloneExercises(item.exercises) })) };
     await saveLiftFlowState(safe);
     setExercises(safe.exercises);
+    setFolders(safe.folders);
     setTemplates(safe.templates);
     setWorkout(safe.activeWorkout);
     setCompletedWorkouts(safe.completedWorkouts);
@@ -766,18 +898,20 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
   }, [workout]);
 
   const value = useMemo<ActiveWorkoutContextValue>(() => ({
-    workout, exercises, templates, completedWorkouts, completedSetCount, totalSetCount, persistenceStatus, lastSavedAt,
+    workout, exercises, folders, templates, completedWorkouts, completedSetCount, totalSetCount, persistenceStatus, lastSavedAt,
     createExercise, updateExercise, setExerciseArchived, deleteExercise, getExerciseUsage,
-    createTemplate, updateTemplate, deleteTemplate, startWorkout, toggleSet, setSetType, toggleSetType,
+    createFolder, renameFolder, deleteFolder, moveFolder,
+    createTemplate, updateTemplate, duplicateTemplate, moveTemplate, moveTemplateToFolder, setTemplateArchived, deleteTemplate, startWorkout, toggleSet, setSetType, toggleSetType,
     updateSetValue, updateSetEffort, copyPreviousSet, addSet, removeSet, moveSet, addExercise,
     removeExercise, moveExercise, replaceExercise, updateExerciseNotes, updateWorkoutNotes,
     setRestTimer, clearRestTimer, finishWorkout, discardWorkout, updateCompletedWorkout,
     deleteCompletedWorkout, repeatCompletedWorkout, saveCompletedWorkoutAsTemplate,
     getStateSnapshot, restoreState,
   }), [
-    workout, exercises, templates, completedWorkouts, completedSetCount, totalSetCount, persistenceStatus, lastSavedAt,
+    workout, exercises, folders, templates, completedWorkouts, completedSetCount, totalSetCount, persistenceStatus, lastSavedAt,
     createExercise, updateExercise, setExerciseArchived, deleteExercise, getExerciseUsage,
-    createTemplate, updateTemplate, deleteTemplate, startWorkout, toggleSet, setSetType, toggleSetType,
+    createFolder, renameFolder, deleteFolder, moveFolder,
+    createTemplate, updateTemplate, duplicateTemplate, moveTemplate, moveTemplateToFolder, setTemplateArchived, deleteTemplate, startWorkout, toggleSet, setSetType, toggleSetType,
     updateSetValue, updateSetEffort, copyPreviousSet, addSet, removeSet, moveSet, addExercise,
     removeExercise, moveExercise, replaceExercise, updateExerciseNotes, updateWorkoutNotes,
     setRestTimer, clearRestTimer, finishWorkout, discardWorkout, updateCompletedWorkout,

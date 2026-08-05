@@ -4,6 +4,7 @@ import type {
   CompletedWorkout,
   LiftFlowStateSnapshot,
   WorkoutExercise,
+  WorkoutFolder,
   WorkoutSet,
   WorkoutSetType,
   WorkoutTemplate,
@@ -13,7 +14,7 @@ import {
   normalizeExerciseType,
 } from '@/lib/exerciseTracking';
 
-export const STORAGE_VERSION = 5 as const;
+export const STORAGE_VERSION = 6 as const;
 
 export type PersistedLiftFlowState = LiftFlowStateSnapshot & {
   version: typeof STORAGE_VERSION;
@@ -147,8 +148,40 @@ function normalizeTemplate(
     name,
     folder: safeString(template.folder, 'My Workouts').trim() || 'My Workouts',
     detail: `${exercises.length} exercise${exercises.length === 1 ? '' : 's'} · ${setCount} planned sets`,
+    archived: Boolean(template.archived),
     exercises,
   };
+}
+
+
+function normalizeFolder(raw: unknown, index: number): WorkoutFolder | null {
+  if (typeof raw === 'string') {
+    const name = raw.trim();
+    return name ? { id: `folder-${index + 1}`, name } : null;
+  }
+  if (!raw || typeof raw !== 'object') return null;
+  const folder = raw as Partial<WorkoutFolder>;
+  const name = safeString(folder.name).trim();
+  if (!name) return null;
+  return { id: safeString(folder.id, `folder-${index + 1}`), name };
+}
+
+function normalizeFolders(raw: unknown, templates: WorkoutTemplate[]): WorkoutFolder[] {
+  const normalized = Array.isArray(raw)
+    ? raw.map(normalizeFolder).filter((folder): folder is WorkoutFolder => Boolean(folder))
+    : [];
+  const seen = new Set<string>();
+  const result: WorkoutFolder[] = [];
+  const add = (folder: WorkoutFolder) => {
+    const key = folder.name.trim().toLowerCase();
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    result.push(folder);
+  };
+  normalized.forEach(add);
+  templates.forEach((template, index) => add({ id: `migrated-folder-${index + 1}`, name: template.folder }));
+  if (result.length === 0) add({ id: 'my-workouts', name: 'My Workouts' });
+  return result;
 }
 
 function normalizeActiveWorkout(
@@ -245,7 +278,7 @@ function normalizeDefinition(raw: unknown): ExerciseDefinition | null {
 export function normalizeLiftFlowState(raw: unknown): PersistedLiftFlowState | null {
   if (!raw || typeof raw !== 'object') return null;
   const state = raw as StoredState;
-  if (![1, 2, 3, 4, STORAGE_VERSION].includes(state.version ?? 0)) return null;
+  if (![1, 2, 3, 4, 5, STORAGE_VERSION].includes(state.version ?? 0)) return null;
   if (!Array.isArray(state.templates) || !Array.isArray(state.completedWorkouts)) return null;
 
   const exercises = Array.isArray(state.exercises)
@@ -259,6 +292,8 @@ export function normalizeLiftFlowState(raw: unknown): PersistedLiftFlowState | n
     .map((template, index) => normalizeTemplate(template, index, safeExercises))
     .filter((template): template is WorkoutTemplate => Boolean(template));
 
+  const folders = normalizeFolders(state.folders, templates);
+
   const completedWorkouts = state.completedWorkouts
     .map((workout, index) => normalizeCompletedWorkout(workout, index, safeExercises))
     .filter((workout): workout is CompletedWorkout => Boolean(workout));
@@ -268,6 +303,7 @@ export function normalizeLiftFlowState(raw: unknown): PersistedLiftFlowState | n
     app: 'LiftFlow',
     exportedAt: safeNumber(state.exportedAt),
     exercises: safeExercises,
+    folders,
     templates,
     activeWorkout: normalizeActiveWorkout(state.activeWorkout, safeExercises),
     completedWorkouts,

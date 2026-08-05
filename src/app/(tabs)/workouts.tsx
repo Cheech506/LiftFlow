@@ -26,6 +26,7 @@ import {
   UpdateTemplateInput,
   useActiveWorkout,
   WorkoutExercise,
+  WorkoutFolder,
   WorkoutSet,
   WorkoutTemplate,
 } from '@/context/ActiveWorkoutContext';
@@ -45,10 +46,19 @@ export default function WorkoutsScreen() {
   const router = useRouter();
   const {
     exercises,
+    folders,
     templates,
     createExercise,
+    createFolder,
+    renameFolder,
+    deleteFolder,
+    moveFolder,
     createTemplate,
     updateTemplate,
+    duplicateTemplate,
+    moveTemplate,
+    moveTemplateToFolder,
+    setTemplateArchived,
     deleteTemplate,
     startWorkout,
     workout,
@@ -57,10 +67,22 @@ export default function WorkoutsScreen() {
   const [createVisible, setCreateVisible] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<WorkoutTemplate | null>(null);
   const [templateActions, setTemplateActions] = useState<WorkoutTemplate | null>(null);
+  const [folderActions, setFolderActions] = useState<WorkoutFolder | null>(null);
+  const [folderEditor, setFolderEditor] = useState<WorkoutFolder | 'new' | null>(null);
+  const [moveTarget, setMoveTarget] = useState<WorkoutTemplate | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
 
   const availableExercises = useMemo(
     () => exercises.filter((exercise) => !exercise.archived),
     [exercises],
+  );
+  const activeTemplates = useMemo(
+    () => templates.filter((template) => !template.archived),
+    [templates],
+  );
+  const archivedTemplates = useMemo(
+    () => templates.filter((template) => template.archived),
+    [templates],
   );
 
   const begin = (template: WorkoutTemplate) => {
@@ -112,6 +134,7 @@ export default function WorkoutsScreen() {
   const saveTemplate = (input: CreateTemplateInput) => {
     const duplicate = templates.some(
       (template) =>
+        !template.archived &&
         template.name.trim().toLowerCase() === input.name.trim().toLowerCase() &&
         template.folder.trim().toLowerCase() === input.folder.trim().toLowerCase(),
     );
@@ -135,6 +158,7 @@ export default function WorkoutsScreen() {
     const duplicate = templates.some(
       (template) =>
         template.id !== input.id &&
+        !template.archived &&
         template.name.trim().toLowerCase() === input.name.trim().toLowerCase() &&
         template.folder.trim().toLowerCase() === input.folder.trim().toLowerCase(),
     );
@@ -170,18 +194,14 @@ export default function WorkoutsScreen() {
   const removeTemplate = (template: WorkoutTemplate) => {
     confirmAction(
       `Delete ${template.name}?`,
-      'This removes only the saved template. Your custom exercises, active workout, and completed workout history will not be deleted.',
+      'This permanently removes only the saved template. Exercises and completed workout history stay untouched.',
       'Delete Template',
       () => {
         const deleted = deleteTemplate(template.id);
         if (!deleted) {
-          showPrototypeNotice(
-            'Template was not deleted',
-            'LiftFlow could not find that template. Reload the app and try again.',
-          );
+          showPrototypeNotice('Template was not deleted', 'LiftFlow could not find that template.');
           return;
         }
-
         if (selectedTemplate?.id === template.id) setSelectedTemplate(null);
         if (editingTemplate?.id === template.id) setEditingTemplate(null);
         setTemplateActions(null);
@@ -189,8 +209,63 @@ export default function WorkoutsScreen() {
     );
   };
 
-  const recentTemplates = templates.slice(-2).reverse();
-  const folders = Array.from(new Set(templates.map((template) => template.folder)));
+  const duplicate = (template: WorkoutTemplate) => {
+    const copy = duplicateTemplate(template.id);
+    setTemplateActions(null);
+    if (!copy) {
+      showPrototypeNotice('Template was not duplicated', 'LiftFlow could not find that template.');
+      return;
+    }
+    setSelectedTemplate(copy);
+  };
+
+  const archive = (template: WorkoutTemplate) => {
+    setTemplateArchived(template.id, true);
+    setTemplateActions(null);
+    setSelectedTemplate(null);
+  };
+
+  const restore = (template: WorkoutTemplate) => {
+    setTemplateArchived(template.id, false);
+  };
+
+  const saveFolder = (name: string) => {
+    if (folderEditor === 'new') {
+      const created = createFolder(name);
+      if (!created) {
+        showPrototypeNotice('Folder could not be created', 'Use a unique folder name.');
+        return false;
+      }
+      setFolderEditor(null);
+      return true;
+    }
+    if (!folderEditor) return false;
+    const renamed = renameFolder(folderEditor.id, name);
+    if (!renamed) {
+      showPrototypeNotice('Folder could not be renamed', 'Use a unique folder name.');
+      return false;
+    }
+    setFolderEditor(null);
+    setFolderActions(null);
+    return true;
+  };
+
+  const removeFolder = (folder: WorkoutFolder) => {
+    confirmAction(
+      `Delete ${folder.name}?`,
+      'Only empty folders can be deleted. Move, archive, or delete its templates first.',
+      'Delete Folder',
+      () => {
+        if (!deleteFolder(folder.id)) {
+          showPrototypeNotice('Folder is not empty', 'Move, archive, or delete every template in this folder first.');
+          return;
+        }
+        setFolderActions(null);
+      },
+    );
+  };
+
+  const recentTemplates = activeTemplates.slice(-2).reverse();
 
   return (
     <>
@@ -211,11 +286,25 @@ export default function WorkoutsScreen() {
           </SectionCard>
         ) : null}
 
-        {folders.map((folder) => (
-          <SectionCard key={folder} title={folder}>
-            {templates
-              .filter((template) => template.folder === folder)
-              .map((template) => (
+        {folders.map((folder) => {
+          const folderTemplates = activeTemplates.filter((template) => template.folder === folder.name);
+          return (
+            <SectionCard
+              key={folder.id}
+              title={folder.name}
+              headerRight={
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`Manage ${folder.name} folder`}
+                  onPress={() => setFolderActions(folder)}
+                  hitSlop={8}
+                  style={({ pressed }) => [styles.folderManageButton, pressed && styles.pressed]}
+                >
+                  <Text style={styles.folderManageLabel}>•••</Text>
+                </Pressable>
+              }
+            >
+              {folderTemplates.length > 0 ? folderTemplates.map((template) => (
                 <WorkoutRow
                   key={template.id}
                   template={template}
@@ -223,25 +312,37 @@ export default function WorkoutsScreen() {
                   onManage={() => setTemplateActions(template)}
                   onStart={() => begin(template)}
                 />
-              ))}
-          </SectionCard>
-        ))}
+              )) : <Text style={styles.emptyFolderText}>No templates in this folder yet.</Text>}
+            </SectionCard>
+          );
+        })}
 
-        <PrimaryButton
-          label="+ New Folder"
-          onPress={() =>
-            showPrototypeNotice(
-              'Folders are created with templates',
-              'Tap New Template and type any folder name. LiftFlow will create that folder automatically.',
-            )
-          }
-          variant="secondary"
-        />
-        <PrimaryButton
-          label="+ New Template"
-          onPress={() => setCreateVisible(true)}
-          variant="secondary"
-        />
+        <PrimaryButton label="+ New Folder" onPress={() => setFolderEditor('new')} variant="secondary" />
+        <PrimaryButton label="+ New Template" onPress={() => setCreateVisible(true)} variant="secondary" />
+
+        {archivedTemplates.length > 0 ? (
+          <SectionCard title={`Archived Templates · ${archivedTemplates.length}`}>
+            <PrimaryButton
+              label={showArchived ? 'Hide Archived Templates' : 'Show Archived Templates'}
+              onPress={() => setShowArchived((current) => !current)}
+              variant="secondary"
+            />
+            {showArchived ? archivedTemplates.map((template) => (
+              <View key={template.id} style={styles.archivedRow}>
+                <View style={styles.workoutCopy}>
+                  <Text style={styles.workoutName}>{template.name}</Text>
+                  <Text style={styles.workoutDetail}>{template.folder} · {template.detail}</Text>
+                </View>
+                <Pressable onPress={() => restore(template)} style={styles.compactActionButton}>
+                  <Text style={styles.compactActionLabel}>Restore</Text>
+                </Pressable>
+                <Pressable onPress={() => removeTemplate(template)} style={[styles.compactActionButton, styles.compactDangerButton]}>
+                  <Text style={styles.compactDangerLabel}>Delete</Text>
+                </Pressable>
+              </View>
+            )) : null}
+          </SectionCard>
+        ) : null}
       </ScrollView>
 
       <TemplatePreviewModal
@@ -261,7 +362,60 @@ export default function WorkoutsScreen() {
           setTemplateActions(null);
         }}
         onEdit={() => templateActions && editTemplate(templateActions)}
+        onDuplicate={() => templateActions && duplicate(templateActions)}
+        onMove={() => {
+          if (!templateActions) return;
+          setMoveTarget(templateActions);
+          setTemplateActions(null);
+        }}
+        onMoveUp={() => {
+          if (!templateActions) return;
+          moveTemplate(templateActions.id, 'up');
+          setTemplateActions(null);
+        }}
+        onMoveDown={() => {
+          if (!templateActions) return;
+          moveTemplate(templateActions.id, 'down');
+          setTemplateActions(null);
+        }}
+        onArchive={() => templateActions && archive(templateActions)}
         onDelete={() => templateActions && removeTemplate(templateActions)}
+      />
+
+      <FolderActionsModal
+        folder={folderActions}
+        onClose={() => setFolderActions(null)}
+        onRename={() => folderActions && setFolderEditor(folderActions)}
+        onMoveUp={() => {
+          if (!folderActions) return;
+          moveFolder(folderActions.id, 'up');
+          setFolderActions(null);
+        }}
+        onMoveDown={() => {
+          if (!folderActions) return;
+          moveFolder(folderActions.id, 'down');
+          setFolderActions(null);
+        }}
+        onDelete={() => folderActions && removeFolder(folderActions)}
+      />
+
+      <FolderNameModal
+        mode={folderEditor === 'new' ? 'create' : 'rename'}
+        folder={folderEditor === 'new' ? null : folderEditor}
+        visible={Boolean(folderEditor)}
+        onClose={() => setFolderEditor(null)}
+        onSave={saveFolder}
+      />
+
+      <MoveTemplateModal
+        template={moveTarget}
+        folders={folders}
+        onClose={() => setMoveTarget(null)}
+        onMove={(folderName) => {
+          if (!moveTarget) return;
+          moveTemplateToFolder(moveTarget.id, folderName);
+          setMoveTarget(null);
+        }}
       />
 
       <CreateTemplateModal
@@ -341,7 +495,6 @@ function TemplatePreviewModal({
               <Text style={styles.modalTitle}>{template.name}</Text>
               <Text style={styles.folder}>{template.folder}</Text>
               <Text style={styles.modalDetail}>{template.detail}</Text>
-
               <ScrollView style={styles.exerciseList}>
                 {template.exercises.map((exercise) => (
                   <View key={exercise.id} style={styles.previewExercise}>
@@ -354,7 +507,6 @@ function TemplatePreviewModal({
                   </View>
                 ))}
               </ScrollView>
-
               <PrimaryButton label="Edit Template" onPress={onEdit} variant="secondary" />
               <PrimaryButton label="Start Workout" onPress={onStart} />
               <PrimaryButton label="Delete Template" onPress={onDelete} variant="danger" />
@@ -372,12 +524,22 @@ function TemplateActionsModal({
   onClose,
   onPreview,
   onEdit,
+  onDuplicate,
+  onMove,
+  onMoveUp,
+  onMoveDown,
+  onArchive,
   onDelete,
 }: {
   template: WorkoutTemplate | null;
   onClose: () => void;
   onPreview: () => void;
   onEdit: () => void;
+  onDuplicate: () => void;
+  onMove: () => void;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+  onArchive: () => void;
   onDelete: () => void;
 }) {
   return (
@@ -390,6 +552,13 @@ function TemplateActionsModal({
               <Text style={styles.actionsSubtitle}>{template.folder}</Text>
               <PrimaryButton label="Preview Template" onPress={onPreview} variant="secondary" />
               <PrimaryButton label="Edit Template" onPress={onEdit} />
+              <PrimaryButton label="Duplicate Template" onPress={onDuplicate} variant="secondary" />
+              <PrimaryButton label="Move to Folder" onPress={onMove} variant="secondary" />
+              <View style={styles.twoButtonRow}>
+                <PrimaryButton label="Move Up" onPress={onMoveUp} variant="secondary" style={styles.halfButton} />
+                <PrimaryButton label="Move Down" onPress={onMoveDown} variant="secondary" style={styles.halfButton} />
+              </View>
+              <PrimaryButton label="Archive Template" onPress={onArchive} variant="secondary" />
               <PrimaryButton label="Delete Template" onPress={onDelete} variant="danger" />
               <PrimaryButton label="Cancel" onPress={onClose} variant="secondary" />
             </>
@@ -400,6 +569,105 @@ function TemplateActionsModal({
   );
 }
 
+function FolderActionsModal({ folder, onClose, onRename, onMoveUp, onMoveDown, onDelete }: {
+  folder: WorkoutFolder | null;
+  onClose: () => void;
+  onRename: () => void;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <Modal transparent visible={Boolean(folder)} animationType="fade" onRequestClose={onClose}>
+      <Pressable style={styles.modalBackdrop} onPress={onClose}>
+        <Pressable style={styles.actionsCard} onPress={(event) => event.stopPropagation()}>
+          {folder ? (
+            <>
+              <Text style={styles.actionsTitle}>{folder.name}</Text>
+              <Text style={styles.actionsSubtitle}>Folder controls</Text>
+              <PrimaryButton label="Rename Folder" onPress={onRename} />
+              <View style={styles.twoButtonRow}>
+                <PrimaryButton label="Move Up" onPress={onMoveUp} variant="secondary" style={styles.halfButton} />
+                <PrimaryButton label="Move Down" onPress={onMoveDown} variant="secondary" style={styles.halfButton} />
+              </View>
+              <PrimaryButton label="Delete Empty Folder" onPress={onDelete} variant="danger" />
+              <PrimaryButton label="Cancel" onPress={onClose} variant="secondary" />
+            </>
+          ) : null}
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+function FolderNameModal({ mode, folder, visible, onClose, onSave }: {
+  mode: 'create' | 'rename';
+  folder: WorkoutFolder | null;
+  visible: boolean;
+  onClose: () => void;
+  onSave: (name: string) => boolean;
+}) {
+  const [name, setName] = useState('');
+  const value = visible && mode === 'rename' && !name ? folder?.name ?? '' : name;
+  const close = () => { setName(''); onClose(); };
+  return (
+    <KeyboardAwareModal visible={visible} onClose={close} cardStyle={styles.smallModalCard}>
+      <Text style={styles.modalTitle}>{mode === 'create' ? 'New Folder' : 'Rename Folder'}</Text>
+      <Text style={styles.modalDetail}>Folders organize templates without changing workout history.</Text>
+      <TextInput
+        value={value}
+        onChangeText={setName}
+        placeholder="Upper / Lower"
+        placeholderTextColor={colors.textMuted}
+        autoFocus
+        style={styles.formInput}
+      />
+      <PrimaryButton label={mode === 'create' ? 'Create Folder' : 'Save Folder Name'} onPress={() => { if (onSave(value)) setName(''); }} />
+      <PrimaryButton label="Cancel" onPress={close} variant="secondary" />
+    </KeyboardAwareModal>
+  );
+}
+
+function MoveTemplateModal({ template, folders, onClose, onMove }: {
+  template: WorkoutTemplate | null;
+  folders: WorkoutFolder[];
+  onClose: () => void;
+  onMove: (folderName: string) => void;
+}) {
+  return (
+    <Modal transparent visible={Boolean(template)} animationType="fade" onRequestClose={onClose}>
+      <Pressable style={styles.modalBackdrop} onPress={onClose}>
+        <Pressable style={styles.actionsCard} onPress={(event) => event.stopPropagation()}>
+          {template ? (
+            <>
+              <Text style={styles.actionsTitle}>Move {template.name}</Text>
+              <Text style={styles.actionsSubtitle}>Current folder: {template.folder}</Text>
+              <ScrollView style={styles.folderChoiceList}>
+                {folders.map((folder) => (
+                  <Pressable
+                    key={folder.id}
+                    disabled={folder.name === template.folder}
+                    onPress={() => onMove(folder.name)}
+                    style={({ pressed }) => [
+                      styles.folderChoice,
+                      folder.name === template.folder && styles.folderChoiceSelected,
+                      pressed && styles.pressed,
+                    ]}
+                  >
+                    <Text style={[styles.folderChoiceLabel, folder.name === template.folder && styles.folderChoiceLabelSelected]}>
+                      {folder.name}{folder.name === template.folder ? ' · Current' : ''}
+                    </Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+              <PrimaryButton label="Cancel" onPress={onClose} variant="secondary" />
+            </>
+          ) : null}
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
 function CreateTemplateModal({
   exercises,
   visible,
@@ -1787,6 +2055,91 @@ const styles = StyleSheet.create({
     color: colors.primary,
     fontSize: 13,
     fontWeight: '900',
+  },
+
+  folderManageButton: {
+    width: 34,
+    height: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radius.sm,
+    borderColor: colors.border,
+    borderWidth: 1,
+    backgroundColor: colors.surfaceElevated,
+  },
+  folderManageLabel: {
+    color: colors.text,
+    fontSize: 16,
+    fontWeight: '900',
+    letterSpacing: 1,
+    marginTop: -4,
+  },
+  emptyFolderText: {
+    color: colors.textMuted,
+    fontSize: 13,
+    lineHeight: 18,
+    paddingVertical: spacing.sm,
+  },
+  archivedRow: {
+    minHeight: 64,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    borderTopColor: colors.border,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  compactActionButton: {
+    minHeight: 38,
+    justifyContent: 'center',
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.sm,
+    borderColor: colors.border,
+    borderWidth: 1,
+    backgroundColor: colors.surfaceElevated,
+  },
+  compactActionLabel: {
+    color: colors.primary,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  compactDangerButton: {
+    borderColor: colors.danger,
+  },
+  compactDangerLabel: {
+    color: colors.danger,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  twoButtonRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  halfButton: {
+    flex: 1,
+  },
+  smallModalCard: {
+    maxWidth: 420,
+  },
+  folderChoiceList: {
+    maxHeight: 320,
+  },
+  folderChoice: {
+    minHeight: 48,
+    justifyContent: 'center',
+    paddingHorizontal: spacing.md,
+    borderBottomColor: colors.border,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  folderChoiceSelected: {
+    opacity: 0.55,
+  },
+  folderChoiceLabel: {
+    color: colors.text,
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  folderChoiceLabelSelected: {
+    color: colors.primary,
   },
 
 });

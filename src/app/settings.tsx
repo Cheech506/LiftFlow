@@ -70,6 +70,7 @@ export default function SettingsScreen() {
           onPress: () => {
             void restoreState({
               exercises: parsed.exercises,
+              folders: parsed.folders,
               templates: parsed.templates,
               activeWorkout: parsed.activeWorkout,
               completedWorkouts: parsed.completedWorkouts,
