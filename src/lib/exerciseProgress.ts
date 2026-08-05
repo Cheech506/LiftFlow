@@ -139,7 +139,7 @@ export function buildExerciseProgress(
 
   const observations = collectObservations(definition, completedWorkouts);
   const records = buildRecords(definition.exerciseType, observations);
-  const recentPrs = buildPrTimeline(definition.exerciseType, observations).slice(0, 8);
+  const recentPrs = buildExercisePrTimeline(definition, completedWorkouts).slice(0, 8);
 
   return {
     exerciseId: definition.id,
@@ -247,10 +247,12 @@ function buildRecords(
     .filter((record): record is ExerciseRecord => Boolean(record));
 }
 
-function buildPrTimeline(
-  exerciseType: ExerciseType,
-  observations: SetObservation[],
+export function buildExercisePrTimeline(
+  definition: ExerciseDefinition,
+  completedWorkouts: CompletedWorkout[],
 ): ExercisePrAchievement[] {
+  const exerciseType = definition.exerciseType;
+  const observations = collectObservations(definition, completedWorkouts);
   const bestValues = new Map<ExerciseRecordKey, number>();
   const achievements: ExercisePrAchievement[] = [];
 

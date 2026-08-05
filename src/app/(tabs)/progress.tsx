@@ -1,87 +1,547 @@
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 
 import { SectionCard } from '@/components/SectionCard';
-import { colors, spacing } from '@/constants/theme';
+import type { ExerciseDefinition } from '@/constants/exercises';
+import { colors, radius, spacing } from '@/constants/theme';
 import { useActiveWorkout } from '@/context/ActiveWorkoutContext';
 import {
-  formatDurationShort,
-  getCompletedSets,
-  getWorkoutDurationSeconds,
-  isInCurrentWeek,
-} from '@/lib/workoutStats';
+  buildExerciseTrend,
+  buildMuscleBreakdown,
+  buildProgressSummary,
+  buildRecentPrs,
+  buildWeeklyProgress,
+  filterWorkoutsForRange,
+  formatProgressDate,
+  formatProgressDuration,
+  formatProgressVolume,
+  getExercisesWithProgress,
+  getExerciseTrendMetricOptions,
+  getTrendChange,
+  PROGRESS_RANGE_OPTIONS,
+  type ExerciseTrendMetricKey,
+  type ExerciseTrendPoint,
+  type ProgressRangeKey,
+} from '@/lib/progressAnalytics';
 
-const TWELVE_WEEKS_MS = 12 * 7 * 24 * 60 * 60 * 1000;
+const WEEKLY_GOAL = 3;
 
 export default function ProgressScreen() {
-  const { completedWorkouts } = useActiveWorkout();
-  const cutoff = Date.now() - TWELVE_WEEKS_MS;
-  const recentWorkouts = completedWorkouts.filter(
-    (workout) => workout.completedAt >= cutoff,
+  const { completedWorkouts, exercises } = useActiveWorkout();
+  const [range, setRange] = useState<ProgressRangeKey>('12w');
+  const [exercisePickerVisible, setExercisePickerVisible] = useState(false);
+
+  const exercisesWithProgress = useMemo(
+    () => getExercisesWithProgress(exercises, completedWorkouts),
+    [completedWorkouts, exercises],
   );
-  const workingSets = recentWorkouts.reduce(
-    (total, workout) => total + getCompletedSets(workout).length,
-    0,
+  const [selectedExerciseId, setSelectedExerciseId] = useState<string | null>(null);
+  const selectedExercise =
+    exercisesWithProgress.find((exercise) => exercise.id === selectedExerciseId) ??
+    exercisesWithProgress[0] ??
+    null;
+  const metricOptions = useMemo(
+    () =>
+      selectedExercise
+        ? getExerciseTrendMetricOptions(selectedExercise.exerciseType)
+        : [],
+    [selectedExercise],
   );
-  const trainingSeconds = recentWorkouts.reduce(
-    (total, workout) => total + getWorkoutDurationSeconds(workout),
-    0,
+  const [selectedMetric, setSelectedMetric] = useState<ExerciseTrendMetricKey | null>(null);
+  const activeMetric =
+    metricOptions.find((option) => option.key === selectedMetric) ?? metricOptions[0] ?? null;
+
+  useEffect(() => {
+    if (!selectedExerciseId && exercisesWithProgress[0]) {
+      setSelectedExerciseId(exercisesWithProgress[0].id);
+    }
+  }, [exercisesWithProgress, selectedExerciseId]);
+
+  useEffect(() => {
+    if (metricOptions.length > 0 && !metricOptions.some((option) => option.key === selectedMetric)) {
+      setSelectedMetric(metricOptions[0].key);
+    }
+  }, [metricOptions, selectedMetric]);
+
+  const summary = useMemo(
+    () => buildProgressSummary(completedWorkouts, exercises, range),
+    [completedWorkouts, exercises, range],
   );
-  const currentWeekCount = completedWorkouts.filter(isInCurrentWeek).length;
+  const weeklyProgress = useMemo(
+    () => buildWeeklyProgress(completedWorkouts, range),
+    [completedWorkouts, range],
+  );
+  const muscleBreakdown = useMemo(
+    () => buildMuscleBreakdown(completedWorkouts, exercises, range),
+    [completedWorkouts, exercises, range],
+  );
+  const recentPrs = useMemo(
+    () => buildRecentPrs(exercises, completedWorkouts, range).slice(0, 8),
+    [completedWorkouts, exercises, range],
+  );
+  const trendPoints = useMemo(
+    () =>
+      selectedExercise && activeMetric
+        ? buildExerciseTrend(
+            selectedExercise,
+            completedWorkouts,
+            activeMetric.key,
+            range,
+          )
+        : [],
+    [activeMetric, completedWorkouts, range, selectedExercise],
+  );
+
+  const currentWeek = weeklyProgress[weeklyProgress.length - 1];
+  const rangedWorkouts = useMemo(
+    () => filterWorkoutsForRange(completedWorkouts, range),
+    [completedWorkouts, range],
+  );
+  const rangeLabel =
+    PROGRESS_RANGE_OPTIONS.find((option) => option.key === range)?.label ?? '12W';
 
   return (
-    <ScrollView contentContainerStyle={styles.content}>
-      <SectionCard title="Last 12 weeks">
-        <View style={styles.statsGrid}>
-          <ProgressStat value={String(recentWorkouts.length)} label="Workouts" />
-          <ProgressStat value={String(workingSets)} label="Working sets" />
-          <ProgressStat value={formatDurationShort(trainingSeconds)} label="Training time" />
-          <ProgressStat value="0" label="New records" />
+    <>
+      <ScrollView contentContainerStyle={styles.content}>
+        <View>
+          <Text style={styles.eyebrow}>TRAINING ANALYTICS</Text>
+          <Text style={styles.hero}>Progress</Text>
+          <Text style={styles.subhead}>Calculated locally from your completed workouts.</Text>
         </View>
-      </SectionCard>
 
-      <SectionCard title="Consistency">
-        <View style={styles.rowBetween}>
-          <View>
-            <Text style={styles.value}>{currentWeekCount} workouts</Text>
-            <Text style={styles.label}>Current week</Text>
-          </View>
-          <View style={styles.goalBadge}>
-            <Text style={styles.goalText}>Goal: 3</Text>
-          </View>
+        <View style={styles.rangeRow}>
+          {PROGRESS_RANGE_OPTIONS.map((option) => (
+            <RangeChip
+              key={option.key}
+              label={option.label}
+              selected={range === option.key}
+              onPress={() => setRange(option.key)}
+            />
+          ))}
         </View>
-        <Text style={styles.bodyText}>
-          {currentWeekCount >= 3
-            ? 'Weekly goal complete. Nice work.'
-            : `${Math.max(0, 3 - currentWeekCount)} workout${
-                3 - currentWeekCount === 1 ? '' : 's'
-              } remaining this week.`}
-        </Text>
-      </SectionCard>
 
-      <SectionCard title="Recent records">
-        <Text style={styles.emptyTitle}>No personal records yet</Text>
-        <Text style={styles.bodyText}>
-          LiftFlow will calculate PRs locally from completed working sets.
-        </Text>
-      </SectionCard>
+        <SectionCard title={`${rangeLabel} overview`}>
+          <View style={styles.statsGrid}>
+            <ProgressStat value={String(summary.workoutCount)} label="Workouts" />
+            <ProgressStat value={String(summary.workingSetCount)} label="Working sets" />
+            <ProgressStat
+              value={formatProgressDuration(summary.trainingSeconds)}
+              label="Training time"
+            />
+            <ProgressStat value={formatProgressVolume(summary.totalVolume)} label="Volume" />
+            <ProgressStat value={String(summary.prCount)} label="New records" />
+            <ProgressStat
+              value={
+                summary.workoutCount > 0
+                  ? String(Math.round(summary.workingSetCount / summary.workoutCount))
+                  : '0'
+              }
+              label="Sets / workout"
+            />
+          </View>
+        </SectionCard>
 
-      <SectionCard title="Exercise progress">
-        <Text style={styles.emptyTitle}>Choose an exercise</Text>
-        <Text style={styles.bodyText}>
-          Strength, volume, RPE, and frequency charts will appear after at least two sessions.
-        </Text>
-      </SectionCard>
-    </ScrollView>
+        <SectionCard title="Weekly activity">
+          <View style={styles.rowBetween}>
+            <View>
+              <Text style={styles.cardValue}>{currentWeek?.workoutCount ?? 0} workouts</Text>
+              <Text style={styles.muted}>Current week</Text>
+            </View>
+            <View style={styles.goalBadge}>
+              <Text style={styles.goalText}>Goal: {WEEKLY_GOAL}</Text>
+            </View>
+          </View>
+          <Text style={styles.bodyText}>
+            {(currentWeek?.workoutCount ?? 0) >= WEEKLY_GOAL
+              ? 'Weekly goal complete. Nice work.'
+              : `${Math.max(0, WEEKLY_GOAL - (currentWeek?.workoutCount ?? 0))} workout${
+                  WEEKLY_GOAL - (currentWeek?.workoutCount ?? 0) === 1 ? '' : 's'
+                } remaining this week.`}
+          </Text>
+          <BarChart
+            items={weeklyProgress}
+            getValue={(item) => item.workoutCount}
+            getLabel={(item) => item.label}
+            formatValue={(value) => String(Math.round(value))}
+            emptyText="Finish a workout to start your weekly activity chart."
+          />
+        </SectionCard>
+
+        <SectionCard title="Weekly volume">
+          <BarChart
+            items={weeklyProgress}
+            getValue={(item) => item.volume}
+            getLabel={(item) => item.label}
+            formatValue={(value) => compactNumber(value)}
+            emptyText="Weight-based working sets will build your weekly volume chart."
+          />
+          {summary.totalVolume > 0 ? (
+            <Text style={styles.chartFootnote}>
+              Warm-up sets and non-weight exercises are excluded from volume.
+            </Text>
+          ) : null}
+        </SectionCard>
+
+        <SectionCard title="Muscle groups">
+          {muscleBreakdown.length > 0 ? (
+            muscleBreakdown.slice(0, 8).map((item) => (
+              <View key={item.muscle} style={styles.muscleRow}>
+                <View style={styles.rowBetween}>
+                  <Text style={styles.muscleName}>{item.muscle}</Text>
+                  <Text style={styles.muscleValue}>
+                    {item.workingSetCount} sets · {Math.round(item.percentage)}%
+                  </Text>
+                </View>
+                <View style={styles.progressTrack}>
+                  <View
+                    style={[
+                      styles.progressFill,
+                      { width: `${Math.max(3, item.percentage)}%` },
+                    ]}
+                  />
+                </View>
+              </View>
+            ))
+          ) : (
+            <EmptyState
+              title="No muscle data yet"
+              body="Complete working sets and LiftFlow will group them by each exercise’s primary muscle."
+            />
+          )}
+        </SectionCard>
+
+        <SectionCard
+          title="Exercise progress"
+          headerRight={
+            exercisesWithProgress.length > 0 ? (
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setExercisePickerVisible(true)}
+                style={({ pressed }) => [styles.selectorButton, pressed && styles.pressed]}
+              >
+                <Text numberOfLines={1} style={styles.selectorText}>
+                  {selectedExercise?.name ?? 'Choose'}⌄
+                </Text>
+              </Pressable>
+            ) : null
+          }
+        >
+          {selectedExercise && activeMetric ? (
+            <>
+              <Text style={styles.exerciseDetail}>{selectedExercise.detail}</Text>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.metricRow}
+              >
+                {metricOptions.map((option) => (
+                  <RangeChip
+                    key={option.key}
+                    label={option.label}
+                    selected={activeMetric.key === option.key}
+                    onPress={() => setSelectedMetric(option.key)}
+                  />
+                ))}
+              </ScrollView>
+              <TrendSummary
+                points={trendPoints}
+                higherIsBetter={activeMetric.higherIsBetter}
+              />
+              <BarChart
+                items={trendPoints}
+                getValue={(item) => item.value}
+                getLabel={(item) => formatProgressDate(item.completedAt)}
+                formatValue={(_, index) => trendPoints[index]?.displayValue ?? ''}
+                lowerIsBetter={!activeMetric.higherIsBetter}
+                emptyText={`Complete ${selectedExercise.name} in at least one workout to see this trend.`}
+              />
+            </>
+          ) : (
+            <EmptyState
+              title="No exercise history yet"
+              body="Complete a working set and its exercise trend will appear here."
+            />
+          )}
+        </SectionCard>
+
+        <SectionCard title="Recent records">
+          {recentPrs.length > 0 ? (
+            recentPrs.map((record, index) => (
+              <View key={record.id}>
+                {index > 0 ? <View style={styles.divider} /> : null}
+                <View style={styles.recordRow}>
+                  <View style={styles.recordCopy}>
+                    <Text style={styles.recordExercise}>{record.exerciseName}</Text>
+                    <Text style={styles.recordLabel}>
+                      {record.label} · {record.workoutName}
+                    </Text>
+                  </View>
+                  <View style={styles.recordRight}>
+                    <Text style={styles.recordValue}>{record.displayValue}</Text>
+                    <Text style={styles.recordDate}>{formatProgressDate(record.achievedAt)}</Text>
+                  </View>
+                </View>
+              </View>
+            ))
+          ) : (
+            <EmptyState
+              title="No records in this range"
+              body="A completed working set creates a PR when it beats your previous best for that metric."
+            />
+          )}
+        </SectionCard>
+
+        {rangedWorkouts.length === 0 ? (
+          <Text style={styles.rangeEmptyNote}>
+            Try a wider date range to include older workouts.
+          </Text>
+        ) : null}
+      </ScrollView>
+
+      <ExercisePickerModal
+        visible={exercisePickerVisible}
+        exercises={exercisesWithProgress}
+        selectedExerciseId={selectedExercise?.id ?? null}
+        onSelect={(exercise) => {
+          setSelectedExerciseId(exercise.id);
+          setSelectedMetric(null);
+          setExercisePickerVisible(false);
+        }}
+        onClose={() => setExercisePickerVisible(false)}
+      />
+    </>
+  );
+}
+
+function RangeChip({
+  label,
+  selected,
+  onPress,
+}: {
+  label: string;
+  selected: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.rangeChip,
+        selected && styles.rangeChipSelected,
+        pressed && styles.pressed,
+      ]}
+    >
+      <Text style={[styles.rangeChipText, selected && styles.rangeChipTextSelected]}>
+        {label}
+      </Text>
+    </Pressable>
   );
 }
 
 function ProgressStat({ value, label }: { value: string; label: string }) {
   return (
     <View style={styles.stat}>
-      <Text style={styles.value}>{value}</Text>
-      <Text style={styles.label}>{label}</Text>
+      <Text numberOfLines={1} adjustsFontSizeToFit style={styles.statValue}>
+        {value}
+      </Text>
+      <Text style={styles.statLabel}>{label}</Text>
     </View>
   );
+}
+
+function BarChart<T>({
+  items,
+  getValue,
+  getLabel,
+  formatValue,
+  emptyText,
+  lowerIsBetter = false,
+}: {
+  items: T[];
+  getValue: (item: T) => number;
+  getLabel: (item: T) => string;
+  formatValue: (value: number, index: number) => string;
+  emptyText: string;
+  lowerIsBetter?: boolean;
+}) {
+  const values = items.map(getValue).filter((value) => Number.isFinite(value));
+  const hasData =
+    items.length > 0 &&
+    values.length > 0 &&
+    (lowerIsBetter || values.some((value) => value > 0));
+  if (!hasData) {
+    return <Text style={styles.bodyText}>{emptyText}</Text>;
+  }
+
+  const max = Math.max(...values);
+  const min = Math.min(...values);
+  const spread = max - min;
+
+  return (
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={styles.chartContent}
+    >
+      {items.map((item, index) => {
+        const value = getValue(item);
+        const normalized = lowerIsBetter && spread > 0
+          ? (max - value) / spread
+          : max > 0
+            ? value / max
+            : 0;
+        const height = value > 0 ? Math.max(10, Math.round(normalized * 92)) : 4;
+
+        return (
+          <View key={`${getLabel(item)}-${index}`} style={styles.chartColumn}>
+            <Text numberOfLines={1} style={styles.chartValue}>
+              {formatValue(value, index)}
+            </Text>
+            <View style={styles.chartBarSlot}>
+              <View style={[styles.chartBar, { height }]} />
+            </View>
+            <Text numberOfLines={1} style={styles.chartLabel}>
+              {getLabel(item)}
+            </Text>
+          </View>
+        );
+      })}
+    </ScrollView>
+  );
+}
+
+function TrendSummary({
+  points,
+  higherIsBetter,
+}: {
+  points: ExerciseTrendPoint[];
+  higherIsBetter: boolean;
+}) {
+  if (points.length === 0) return null;
+  const latest = points[points.length - 1];
+  const best = [...points].sort((a, b) =>
+    higherIsBetter ? b.value - a.value : a.value - b.value,
+  )[0];
+  const change = getTrendChange(points, higherIsBetter);
+
+  return (
+    <View style={styles.trendSummary}>
+      <View style={styles.trendStat}>
+        <Text style={styles.trendLabel}>Latest</Text>
+        <Text style={styles.trendValue}>{latest.displayValue}</Text>
+      </View>
+      <View style={styles.trendStat}>
+        <Text style={styles.trendLabel}>Best</Text>
+        <Text style={styles.trendValue}>{best.displayValue}</Text>
+      </View>
+      <View style={styles.trendStat}>
+        <Text style={styles.trendLabel}>Change</Text>
+        <Text
+          style={[
+            styles.trendValue,
+            change?.improved ? styles.positiveText : styles.neutralText,
+          ]}
+        >
+          {change?.label ?? '—'}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+function EmptyState({ title, body }: { title: string; body: string }) {
+  return (
+    <View style={styles.emptyState}>
+      <Text style={styles.emptyTitle}>{title}</Text>
+      <Text style={styles.bodyText}>{body}</Text>
+    </View>
+  );
+}
+
+function ExercisePickerModal({
+  visible,
+  exercises,
+  selectedExerciseId,
+  onSelect,
+  onClose,
+}: {
+  visible: boolean;
+  exercises: ExerciseDefinition[];
+  selectedExerciseId: string | null;
+  onSelect: (exercise: ExerciseDefinition) => void;
+  onClose: () => void;
+}) {
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={onClose}
+    >
+      <View style={styles.modalBackdrop}>
+        <Pressable style={styles.modalDismissLayer} onPress={onClose} />
+        <View style={styles.modalCard}>
+          <View style={styles.modalHeader}>
+            <View>
+              <Text style={styles.modalTitle}>Choose Exercise</Text>
+              <Text style={styles.modalSubtitle}>Only exercises with recorded working sets appear.</Text>
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              onPress={onClose}
+              style={({ pressed }) => [styles.closeButton, pressed && styles.pressed]}
+            >
+              <Text style={styles.closeButtonText}>Close</Text>
+            </Pressable>
+          </View>
+          <ScrollView contentContainerStyle={styles.modalList}>
+            {exercises.map((exercise) => {
+              const selected = exercise.id === selectedExerciseId;
+              return (
+                <Pressable
+                  key={exercise.id}
+                  accessibilityRole="button"
+                  onPress={() => onSelect(exercise)}
+                  style={({ pressed }) => [
+                    styles.exerciseOption,
+                    selected && styles.exerciseOptionSelected,
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  <View style={styles.exerciseOptionCopy}>
+                    <Text style={styles.exerciseOptionName}>{exercise.name}</Text>
+                    <Text style={styles.exerciseOptionDetail}>{exercise.detail}</Text>
+                  </View>
+                  <Text style={selected ? styles.checkSelected : styles.checkMuted}>
+                    {selected ? '✓' : '›'}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function compactNumber(value: number): string {
+  if (value >= 1_000_000) return `${trim(value / 1_000_000)}M`;
+  if (value >= 1_000) return `${trim(value / 1_000)}K`;
+  return String(Math.round(value));
+}
+
+function trim(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(1).replace(/\.0$/, '');
 }
 
 const styles = StyleSheet.create({
@@ -90,6 +550,53 @@ const styles = StyleSheet.create({
     paddingBottom: 150,
     gap: spacing.md,
   },
+  eyebrow: {
+    color: colors.primary,
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 1.2,
+  },
+  hero: {
+    color: colors.text,
+    fontSize: 30,
+    fontWeight: '900',
+    marginTop: 4,
+  },
+  subhead: {
+    color: colors.textMuted,
+    fontSize: 15,
+    marginTop: 4,
+  },
+  rangeRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  rangeChip: {
+    minHeight: 38,
+    minWidth: 54,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  rangeChipSelected: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  rangeChipText: {
+    color: colors.textMuted,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  rangeChipTextSelected: {
+    color: colors.background,
+  },
+  pressed: {
+    opacity: 0.75,
+  },
   statsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -97,13 +604,14 @@ const styles = StyleSheet.create({
   },
   stat: {
     width: '50%',
+    paddingRight: spacing.sm,
   },
-  value: {
+  statValue: {
     color: colors.text,
-    fontSize: 23,
+    fontSize: 22,
     fontWeight: '900',
   },
-  label: {
+  statLabel: {
     color: colors.textMuted,
     fontSize: 13,
     marginTop: 3,
@@ -112,10 +620,21 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  cardValue: {
+    color: colors.text,
+    fontSize: 21,
+    fontWeight: '900',
+  },
+  muted: {
+    color: colors.textMuted,
+    fontSize: 13,
+    marginTop: 2,
   },
   goalBadge: {
     backgroundColor: colors.surfaceElevated,
-    borderRadius: 999,
+    borderRadius: radius.pill,
     paddingHorizontal: 12,
     paddingVertical: 7,
   },
@@ -128,9 +647,273 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
   },
+  chartContent: {
+    minWidth: '100%',
+    alignItems: 'flex-end',
+    paddingTop: spacing.sm,
+    paddingBottom: 2,
+    gap: spacing.sm,
+  },
+  chartColumn: {
+    width: 48,
+    alignItems: 'center',
+  },
+  chartValue: {
+    width: 52,
+    color: colors.textMuted,
+    fontSize: 10,
+    fontWeight: '800',
+    textAlign: 'center',
+    marginBottom: 5,
+  },
+  chartBarSlot: {
+    height: 96,
+    width: 24,
+    justifyContent: 'flex-end',
+    borderRadius: radius.sm,
+    backgroundColor: colors.surfaceElevated,
+    overflow: 'hidden',
+  },
+  chartBar: {
+    width: '100%',
+    minHeight: 4,
+    backgroundColor: colors.primary,
+    borderRadius: radius.sm,
+  },
+  chartLabel: {
+    width: 52,
+    color: colors.textMuted,
+    fontSize: 10,
+    textAlign: 'center',
+    marginTop: 6,
+  },
+  chartFootnote: {
+    color: colors.textMuted,
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  muscleRow: {
+    gap: 6,
+  },
+  muscleName: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  muscleValue: {
+    color: colors.textMuted,
+    fontSize: 12,
+  },
+  progressTrack: {
+    height: 8,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surfaceElevated,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: radius.pill,
+    backgroundColor: colors.primary,
+  },
+  selectorButton: {
+    maxWidth: 180,
+    minHeight: 34,
+    justifyContent: 'center',
+    paddingHorizontal: 11,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surfaceElevated,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  selectorText: {
+    color: colors.text,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  exerciseDetail: {
+    color: colors.textMuted,
+    fontSize: 13,
+  },
+  metricRow: {
+    gap: spacing.sm,
+    paddingVertical: 2,
+  },
+  trendSummary: {
+    flexDirection: 'row',
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    backgroundColor: colors.surfaceElevated,
+    paddingVertical: spacing.sm,
+  },
+  trendStat: {
+    flex: 1,
+    alignItems: 'center',
+    paddingHorizontal: 4,
+  },
+  trendLabel: {
+    color: colors.textMuted,
+    fontSize: 10,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  trendValue: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: '900',
+    marginTop: 4,
+  },
+  positiveText: {
+    color: colors.primary,
+  },
+  neutralText: {
+    color: colors.textMuted,
+  },
+  recordRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    paddingVertical: 2,
+  },
+  recordCopy: {
+    flex: 1,
+  },
+  recordExercise: {
+    color: colors.text,
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  recordLabel: {
+    color: colors.textMuted,
+    fontSize: 12,
+    marginTop: 3,
+  },
+  recordRight: {
+    alignItems: 'flex-end',
+  },
+  recordValue: {
+    color: colors.primary,
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  recordDate: {
+    color: colors.textMuted,
+    fontSize: 11,
+    marginTop: 3,
+  },
+  divider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: colors.border,
+    marginVertical: spacing.sm,
+  },
+  emptyState: {
+    paddingVertical: spacing.sm,
+    gap: 5,
+  },
   emptyTitle: {
     color: colors.text,
-    fontSize: 17,
-    fontWeight: '800',
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  rangeEmptyNote: {
+    color: colors.textMuted,
+    fontSize: 12,
+    textAlign: 'center',
+  },
+  modalBackdrop: {
+    flex: 1,
+    justifyContent: 'center',
+    padding: spacing.md,
+    backgroundColor: 'rgba(0,0,0,0.72)',
+  },
+  modalDismissLayer: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+  },
+  modalCard: {
+    maxHeight: '78%',
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.lg,
+    padding: spacing.md,
+    gap: spacing.md,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  modalTitle: {
+    color: colors.text,
+    fontSize: 21,
+    fontWeight: '900',
+  },
+  modalSubtitle: {
+    maxWidth: 230,
+    color: colors.textMuted,
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 4,
+  },
+  closeButton: {
+    minHeight: 36,
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surfaceElevated,
+  },
+  closeButtonText: {
+    color: colors.text,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  modalList: {
+    gap: spacing.sm,
+    paddingBottom: spacing.sm,
+  },
+  exerciseOption: {
+    minHeight: 60,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceElevated,
+  },
+  exerciseOptionSelected: {
+    borderColor: colors.primary,
+  },
+  exerciseOptionCopy: {
+    flex: 1,
+  },
+  exerciseOptionName: {
+    color: colors.text,
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  exerciseOptionDetail: {
+    color: colors.textMuted,
+    fontSize: 12,
+    marginTop: 3,
+  },
+  checkSelected: {
+    color: colors.primary,
+    fontSize: 20,
+    fontWeight: '900',
+  },
+  checkMuted: {
+    color: colors.textMuted,
+    fontSize: 20,
   },
 });
