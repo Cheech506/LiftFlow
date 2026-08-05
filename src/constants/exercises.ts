@@ -18,6 +18,7 @@ export type ExerciseDefinition = {
   defaultReps?: number;
   defaultDurationSeconds?: number;
   defaultDistance?: number;
+  defaultRestSeconds?: number;
   favorite?: boolean;
   recent?: boolean;
   isCustom?: boolean;

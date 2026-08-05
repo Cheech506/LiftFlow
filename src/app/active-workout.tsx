@@ -77,8 +77,15 @@ export default function ActiveWorkoutScreen() {
     replaceExercise,
     updateExerciseNotes,
     updateWorkoutNotes,
+    restTimerSettings,
     setRestTimer,
+    adjustRestTimer,
+    pauseRestTimer,
+    resumeRestTimer,
+    restartRestTimer,
     clearRestTimer,
+    acknowledgeRestTimerComplete,
+    updateWorkoutExerciseRestSeconds,
     finishWorkout,
     discardWorkout,
     persistenceStatus,
@@ -90,6 +97,7 @@ export default function ActiveWorkoutScreen() {
   const [exerciseMenuId, setExerciseMenuId] = useState<string | null>(null);
   const [replaceExerciseId, setReplaceExerciseId] = useState<string | null>(null);
   const [setMenu, setSetMenu] = useState<SetMenuState>(null);
+  const [restTimerOpen, setRestTimerOpen] = useState(false);
 
   const availableExercises = useMemo(
     () => exercises.filter((exercise) => !exercise.archived),
@@ -104,13 +112,15 @@ export default function ActiveWorkoutScreen() {
   const elapsed = workout
     ? Math.max(0, Math.floor((now - workout.startedAt) / 1000))
     : 0;
-  const restSeconds = workout?.restTimerEndsAt
+  const restSeconds = workout?.restTimerPausedSeconds ?? (workout?.restTimerEndsAt
     ? Math.max(0, Math.ceil((workout.restTimerEndsAt - now) / 1000))
-    : 0;
+    : 0);
+  const restTimerRunning = Boolean(workout?.restTimerEndsAt);
+  const restTimerPaused = workout?.restTimerPausedSeconds !== undefined;
 
   useEffect(() => {
-    if (workout?.restTimerEndsAt && restSeconds === 0) clearRestTimer();
-  }, [clearRestTimer, restSeconds, workout?.restTimerEndsAt]);
+    if (workout?.restTimerCompletedAt) setRestTimerOpen(true);
+  }, [workout?.restTimerCompletedAt]);
 
   const selectedExercise = workout?.exercises.find((exercise) => exercise.id === exerciseMenuId) ?? null;
   const selectedSetExercise = workout?.exercises.find((exercise) => exercise.id === setMenu?.exerciseId) ?? null;
@@ -165,11 +175,11 @@ export default function ActiveWorkoutScreen() {
         </Pressable>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={restSeconds > 0 ? 'Stop rest timer' : 'Start two minute rest timer'}
-          onPress={() => (restSeconds > 0 ? clearRestTimer() : setRestTimer(120))}
+          accessibilityLabel="Open rest timer controls"
+          onPress={() => setRestTimerOpen(true)}
           style={({ pressed }) => [styles.restButton, pressed && styles.pressed]}
         >
-          <Text style={styles.restText}>{restSeconds > 0 ? `Rest ${formatDuration(restSeconds)}` : 'Rest Timer'}</Text>
+          <Text style={styles.restText}>{workout.restTimerCompletedAt ? 'Rest complete' : restTimerPaused ? `Paused ${formatDuration(restSeconds)}` : restTimerRunning ? `Rest ${formatDuration(restSeconds)}` : 'Rest Timer'}</Text>
         </Pressable>
         <Pressable
           accessibilityRole="button"
@@ -220,7 +230,9 @@ export default function ActiveWorkoutScreen() {
               onToggle={(setId) => {
                 const set = exercise.sets.find((item) => item.id === setId);
                 toggleSet(exercise.id, setId);
-                if (set && !set.completed) setRestTimer(120);
+                if (set && !set.completed && restTimerSettings.autoStart) {
+                  setRestTimer(exercise.restSeconds ?? restTimerSettings.defaultSeconds, exercise.id);
+                }
               }}
               onUpdateValue={(setId, field, value) => updateSetValue(exercise.id, setId, field, value)}
               onCopyPrevious={(setId) => copyPreviousSet(exercise.id, setId)}
@@ -284,6 +296,10 @@ export default function ActiveWorkoutScreen() {
           if (selectedExercise) setReplaceExerciseId(selectedExercise.id);
           setExerciseMenuId(null);
         }}
+        restSeconds={selectedExercise?.restSeconds ?? restTimerSettings.defaultSeconds}
+        onRestSecondsChange={(seconds) => {
+          if (selectedExercise) updateWorkoutExerciseRestSeconds(selectedExercise.id, seconds);
+        }}
         onRemove={() => {
           if (!selectedExercise) return;
           Alert.alert('Remove exercise?', `${selectedExercise.name} will only be removed from this active workout.`, [
@@ -311,6 +327,23 @@ export default function ActiveWorkoutScreen() {
           if (setMenu) removeSet(setMenu.exerciseId, setMenu.setId);
           setSetMenu(null);
         }}
+      />
+
+      <RestTimerModal
+        visible={restTimerOpen}
+        seconds={restSeconds}
+        durationSeconds={workout.restTimerDurationSeconds ?? restTimerSettings.defaultSeconds}
+        running={restTimerRunning}
+        paused={restTimerPaused}
+        complete={Boolean(workout.restTimerCompletedAt)}
+        sourceExerciseName={workout.exercises.find((exercise) => exercise.id === workout.restTimerSourceExerciseId)?.name}
+        onClose={() => { acknowledgeRestTimerComplete(); setRestTimerOpen(false); }}
+        onStart={() => setRestTimer(workout.restTimerDurationSeconds ?? restTimerSettings.defaultSeconds, workout.restTimerSourceExerciseId)}
+        onAdjust={adjustRestTimer}
+        onPause={pauseRestTimer}
+        onResume={resumeRestTimer}
+        onRestart={restartRestTimer}
+        onSkip={() => { clearRestTimer(); setRestTimerOpen(false); }}
       />
 
       <NumericKeyboardAccessory />
@@ -481,7 +514,37 @@ function ExercisePickerModal({ title, exercises, visible, disabledNames, onClose
   );
 }
 
-function ExerciseActionsModal({ exercise, canMoveUp, canMoveDown, onClose, onMove, onReplace, onRemove }: { exercise: WorkoutExercise | null; canMoveUp: boolean; canMoveDown: boolean; onClose: () => void; onMove: (direction: 'up' | 'down') => void; onReplace: () => void; onRemove: () => void }) {
+
+function RestTimerModal({ visible, seconds, durationSeconds, running, paused, complete, sourceExerciseName, onClose, onStart, onAdjust, onPause, onResume, onRestart, onSkip }: { visible: boolean; seconds: number; durationSeconds: number; running: boolean; paused: boolean; complete: boolean; sourceExerciseName?: string; onClose: () => void; onStart: () => void; onAdjust: (seconds: number) => void; onPause: () => void; onResume: () => void; onRestart: () => void; onSkip: () => void }) {
+  return (
+    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
+      <View style={styles.modalBackdrop}>
+        <View style={styles.modalCard}>
+          <Text style={styles.modalTitle}>{complete ? 'Rest complete' : 'Rest Timer'}</Text>
+          <Text style={styles.restTimerDisplay}>{complete ? 'GO' : formatDuration(seconds || durationSeconds)}</Text>
+          <Text style={styles.modalBody}>
+            {sourceExerciseName ? `Started after ${sourceExerciseName}. ` : ''}
+            {complete ? 'Your next set is ready.' : paused ? 'Timer is paused and saved on this device.' : running ? 'The timer keeps counting while you move around LiftFlow.' : 'Start the shown timer or complete a set to start that exercise’s timer automatically.'}
+          </Text>
+          {!complete ? (
+            <View style={styles.timerStepper}>
+              <SmallAction label="−15 sec" disabled={!running && !paused} onPress={() => onAdjust(-15)} />
+              <SmallAction label="+15 sec" disabled={!running && !paused} onPress={() => onAdjust(15)} />
+            </View>
+          ) : null}
+          {!running && !paused && !complete ? <PrimaryButton label={`Start ${formatDuration(durationSeconds)}`} onPress={onStart} /> : null}
+          {running ? <PrimaryButton label="Pause" onPress={onPause} variant="secondary" /> : null}
+          {paused ? <PrimaryButton label="Resume" onPress={onResume} /> : null}
+          {(running || paused || complete) ? <PrimaryButton label="Restart" onPress={onRestart} variant="secondary" /> : null}
+          {(running || paused) ? <PrimaryButton label="Skip Rest" onPress={onSkip} variant="danger" /> : null}
+          <PrimaryButton label={complete ? 'Ready for Next Set' : 'Close'} onPress={onClose} variant={complete ? 'primary' : 'secondary'} />
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function ExerciseActionsModal({ exercise, canMoveUp, canMoveDown, restSeconds, onClose, onMove, onReplace, onRestSecondsChange, onRemove }: { exercise: WorkoutExercise | null; canMoveUp: boolean; canMoveDown: boolean; restSeconds: number; onClose: () => void; onMove: (direction: 'up' | 'down') => void; onReplace: () => void; onRestSecondsChange: (seconds: number) => void; onRemove: () => void }) {
   return (
     <Modal transparent visible={Boolean(exercise)} animationType="fade" onRequestClose={onClose}>
       <View style={styles.modalBackdrop}>
@@ -489,6 +552,12 @@ function ExerciseActionsModal({ exercise, canMoveUp, canMoveDown, onClose, onMov
           {exercise ? (
             <>
               <Text style={styles.modalTitle}>{exercise.name}</Text>
+              <Text style={styles.controlLabel}>Rest after completed sets</Text>
+              <View style={styles.timerStepper}>
+                <SmallAction label="−15 sec" onPress={() => onRestSecondsChange(Math.max(15, restSeconds - 15))} />
+                <Text style={styles.timerStepperValue}>{formatDuration(restSeconds)}</Text>
+                <SmallAction label="+15 sec" onPress={() => onRestSecondsChange(Math.min(3600, restSeconds + 15))} />
+              </View>
               <View style={styles.horizontalButtons}>
                 <SmallAction label="Move Up" disabled={!canMoveUp} onPress={() => onMove('up')} />
                 <SmallAction label="Move Down" disabled={!canMoveDown} onPress={() => onMove('down')} />
@@ -680,6 +749,7 @@ const styles = StyleSheet.create({
   close: { color: colors.text, fontSize: 30, lineHeight: 34, fontWeight: '700' },
   restButton: { backgroundColor: colors.surfaceElevated, borderRadius: radius.pill, paddingHorizontal: 14, paddingVertical: 8 },
   restText: { color: colors.primary, fontSize: 13, fontWeight: '800' },
+  restTimerDisplay: { color: colors.primary, fontSize: 46, fontWeight: '900', textAlign: 'center', letterSpacing: 1 },
   finish: { color: colors.primary, fontSize: 16, fontWeight: '900' },
   pressed: { opacity: 0.65 },
   disabled: { opacity: 0.35 },
@@ -750,6 +820,8 @@ const styles = StyleSheet.create({
   addLabel: { color: colors.primary, fontSize: 13, fontWeight: '900' },
   addedLabel: { color: colors.textMuted, fontSize: 13, fontWeight: '700' },
   horizontalButtons: { flexDirection: 'row', gap: spacing.sm },
+  timerStepper: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  timerStepperValue: { minWidth: 74, color: colors.text, fontSize: 18, fontWeight: '900', textAlign: 'center' },
   smallAction: { flex: 1, minHeight: 44, borderRadius: radius.md, backgroundColor: colors.surfaceElevated, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
   smallActionActive: { borderColor: colors.primary },
   smallActionText: { color: colors.text, fontSize: 13, fontWeight: '800' },

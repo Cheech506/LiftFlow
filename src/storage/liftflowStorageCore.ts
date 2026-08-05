@@ -8,13 +8,14 @@ import type {
   WorkoutSet,
   WorkoutSetType,
   WorkoutTemplate,
+  RestTimerSettings,
 } from '@/context/ActiveWorkoutContext';
 import {
   clearIrrelevantMetrics,
   normalizeExerciseType,
 } from '@/lib/exerciseTracking';
 
-export const STORAGE_VERSION = 6 as const;
+export const STORAGE_VERSION = 7 as const;
 
 export type PersistedLiftFlowState = LiftFlowStateSnapshot & {
   version: typeof STORAGE_VERSION;
@@ -36,10 +37,29 @@ function safeString(value: unknown, fallback = '') {
   return typeof value === 'string' ? value : fallback;
 }
 
+function safeBoolean(value: unknown, fallback: boolean) {
+  return typeof value === 'boolean' ? value : fallback;
+}
+
 function safeNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
     ? value
     : undefined;
+}
+
+function normalizeRestSeconds(value: unknown, fallback = 120) {
+  const parsed = safeNumber(value);
+  return Math.max(15, Math.min(3600, Math.round(parsed ?? fallback)));
+}
+
+function normalizeRestTimerSettings(raw: unknown): RestTimerSettings {
+  const settings = raw && typeof raw === 'object' ? raw as Partial<RestTimerSettings> : {};
+  return {
+    defaultSeconds: normalizeRestSeconds(settings.defaultSeconds, 120),
+    autoStart: safeBoolean(settings.autoStart, true),
+    vibrationEnabled: safeBoolean(settings.vibrationEnabled, true),
+    notificationsEnabled: safeBoolean(settings.notificationsEnabled, false),
+  };
 }
 
 function normalizeSet(raw: unknown, fallbackId: string): WorkoutSet {
@@ -112,6 +132,7 @@ function normalizeExercise(
       safeString(exercise.exerciseDefinitionId) || definition?.id || undefined,
     name,
     exerciseType,
+    restSeconds: normalizeRestSeconds(exercise.restSeconds ?? definition?.defaultRestSeconds),
     notes: safeString(exercise.notes),
     sets,
   };
@@ -199,6 +220,11 @@ function normalizeActiveWorkout(
     sourceTemplateId: safeString(workout.sourceTemplateId) || undefined,
     notes: safeString(workout.notes),
     restTimerEndsAt: safeNumber(workout.restTimerEndsAt),
+    restTimerDurationSeconds: safeNumber(workout.restTimerDurationSeconds),
+    restTimerPausedSeconds: safeNumber(workout.restTimerPausedSeconds),
+    restTimerSourceExerciseId: safeString(workout.restTimerSourceExerciseId) || undefined,
+    restTimerCompletedAt: safeNumber(workout.restTimerCompletedAt),
+    restTimerNotificationId: safeString(workout.restTimerNotificationId) || undefined,
     exercises: normalizeExercises(
       workout.exercises,
       safeString(workout.id, 'active'),
@@ -265,6 +291,7 @@ function normalizeDefinition(raw: unknown): ExerciseDefinition | null {
       exerciseType === 'Distance & Duration'
         ? safeNumber(exercise.defaultDistance)
         : undefined,
+    defaultRestSeconds: normalizeRestSeconds(exercise.defaultRestSeconds),
     favorite: Boolean(exercise.favorite),
     recent: Boolean(exercise.recent),
     isCustom: Boolean(exercise.isCustom),
@@ -278,7 +305,7 @@ function normalizeDefinition(raw: unknown): ExerciseDefinition | null {
 export function normalizeLiftFlowState(raw: unknown): PersistedLiftFlowState | null {
   if (!raw || typeof raw !== 'object') return null;
   const state = raw as StoredState;
-  if (![1, 2, 3, 4, 5, STORAGE_VERSION].includes(state.version ?? 0)) return null;
+  if (![1, 2, 3, 4, 5, 6, STORAGE_VERSION].includes(state.version ?? 0)) return null;
   if (!Array.isArray(state.templates) || !Array.isArray(state.completedWorkouts)) return null;
 
   const exercises = Array.isArray(state.exercises)
@@ -307,6 +334,7 @@ export function normalizeLiftFlowState(raw: unknown): PersistedLiftFlowState | n
     templates,
     activeWorkout: normalizeActiveWorkout(state.activeWorkout, safeExercises),
     completedWorkouts,
+    restTimerSettings: normalizeRestTimerSettings(state.restTimerSettings),
   };
 }
 

@@ -7,10 +7,11 @@ import { useActiveWorkout } from '@/context/ActiveWorkoutContext';
 import { pickTextFile, shareTextFile } from '@/lib/dataTransfer';
 import { buildLiftFlowBackup, buildWorkoutHistoryCsv, exportFileStamp } from '@/lib/exportData';
 import { showPrototypeNotice } from '@/lib/prototypeNotice';
+import { requestRestTimerAlertPermission } from '@/lib/restTimerAlerts';
 import { parseLiftFlowBackup } from '@/storage/liftflowStorage';
 
 const plannedSections = [
-  { title: 'Workout', rows: ['Units', 'Set Entry', 'Rest Timer', 'RPE', 'Workout Behavior'] },
+  { title: 'Workout', rows: ['Units', 'Set Entry', 'RPE', 'Workout Behavior'] },
   { title: 'Appearance', rows: ['Theme', 'Accent Color', 'Workout Display'] },
   { title: 'Self-hosting', rows: ['Server Connection', 'Synchronization', 'Devices', 'Server Status'] },
   { title: 'Application', rows: ['Notifications', 'Progress Settings', 'Archived Items', 'About LiftFlow'] },
@@ -26,6 +27,8 @@ export default function SettingsScreen() {
     completedWorkouts,
     getStateSnapshot,
     restoreState,
+    restTimerSettings,
+    updateRestTimerSettings,
   } = useActiveWorkout();
   const [busyAction, setBusyAction] = useState<string | null>(null);
 
@@ -74,6 +77,7 @@ export default function SettingsScreen() {
               templates: parsed.templates,
               activeWorkout: parsed.activeWorkout,
               completedWorkouts: parsed.completedWorkouts,
+              restTimerSettings: parsed.restTimerSettings,
             })
               .then(() => Alert.alert('Backup restored', 'LiftFlow restored the backup successfully.'))
               .catch((error: unknown) => Alert.alert('Restore failed', error instanceof Error ? error.message : 'The backup could not be restored.'));
@@ -87,6 +91,19 @@ export default function SettingsScreen() {
     showPrototypeNotice(label, 'This setting is planned for a later release. Stable v0.1 is focused on dependable local workout recording and data protection.');
   };
 
+  const toggleRestNotifications = async (enabled: boolean) => {
+    if (!enabled) {
+      updateRestTimerSettings({ notificationsEnabled: false });
+      return;
+    }
+    const granted = await requestRestTimerAlertPermission();
+    if (!granted) {
+      Alert.alert('Notifications not enabled', 'Allow LiftFlow notifications in iPhone or Android settings to receive rest alerts while the app is locked.');
+      return;
+    }
+    updateRestTimerSettings({ notificationsEnabled: true });
+  };
+
   return (
     <ScrollView contentContainerStyle={styles.content}>
       <SectionCard title="Stable local release">
@@ -98,6 +115,47 @@ export default function SettingsScreen() {
         <SettingsRow label={`${exercises.filter((item) => item.isCustom).length} custom exercises`} detail={`${exercises.filter((item) => item.archived).length} archived`} />
         <SettingsRow label={`${templates.length} workout templates`} detail={workout ? `Active workout: ${workout.name}` : 'No active workout'} />
         <SettingsRow label={`${completedWorkouts.length} completed workouts`} detail="Stored on this device" />
+      </SectionCard>
+
+
+      <SectionCard title="Rest timer">
+        <View style={styles.timerSettingRow}>
+          <View style={styles.copy}>
+            <Text style={styles.rowLabel}>Default rest time</Text>
+            <Text style={styles.rowDetail}>Starting value for manual timers and newly created exercises</Text>
+          </View>
+          <View style={styles.stepper}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Decrease default rest time by 15 seconds"
+              onPress={() => updateRestTimerSettings({ defaultSeconds: restTimerSettings.defaultSeconds - 15 })}
+              style={({ pressed }) => [styles.stepButton, pressed && styles.pressed]}
+            >
+              <Text style={styles.stepButtonLabel}>−15</Text>
+            </Pressable>
+            <Text style={styles.timerValue}>{formatRestTime(restTimerSettings.defaultSeconds)}</Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Increase default rest time by 15 seconds"
+              onPress={() => updateRestTimerSettings({ defaultSeconds: restTimerSettings.defaultSeconds + 15 })}
+              style={({ pressed }) => [styles.stepButton, pressed && styles.pressed]}
+            >
+              <Text style={styles.stepButtonLabel}>+15</Text>
+            </Pressable>
+          </View>
+        </View>
+        <View style={styles.switchRow}>
+          <View style={styles.copy}><Text style={styles.rowLabel}>Auto-start after a completed set</Text><Text style={styles.rowDetail}>Uses the exercise rest time, then falls back to the global default</Text></View>
+          <Switch value={restTimerSettings.autoStart} onValueChange={(autoStart) => updateRestTimerSettings({ autoStart })} trackColor={{ true: colors.primary }} />
+        </View>
+        <View style={styles.switchRow}>
+          <View style={styles.copy}><Text style={styles.rowLabel}>Lock-screen rest alerts</Text><Text style={styles.rowDetail}>Schedules a local notification with sound when the timer finishes</Text></View>
+          <Switch value={restTimerSettings.notificationsEnabled} onValueChange={(enabled) => { void toggleRestNotifications(enabled); }} trackColor={{ true: colors.primary }} />
+        </View>
+        <View style={styles.switchRow}>
+          <View style={styles.copy}><Text style={styles.rowLabel}>Vibrate when rest ends</Text><Text style={styles.rowDetail}>Uses device haptics when LiftFlow is running</Text></View>
+          <Switch value={restTimerSettings.vibrationEnabled} onValueChange={(vibrationEnabled) => updateRestTimerSettings({ vibrationEnabled })} trackColor={{ true: colors.primary }} />
+        </View>
       </SectionCard>
 
       <SectionCard title="Export and backup">
@@ -152,6 +210,12 @@ function formatPersistenceStatus(status: 'loading' | 'saving' | 'saved' | 'error
   return 'Local data is saved';
 }
 
+function formatRestTime(totalSeconds: number) {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
 function formatSavedTime(timestamp: number) {
   return new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' }).format(new Date(timestamp));
 }
@@ -160,6 +224,11 @@ const styles = StyleSheet.create({
   content: { padding: spacing.md, paddingBottom: spacing.xl, gap: spacing.md },
   row: { minHeight: 58, flexDirection: 'row', alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
   switchRow: { minHeight: 64, flexDirection: 'row', alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+  timerSettingRow: { paddingVertical: spacing.md, gap: spacing.sm, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+  stepper: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  stepButton: { minWidth: 58, minHeight: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 10, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surfaceElevated },
+  stepButtonLabel: { color: colors.primary, fontSize: 14, fontWeight: '900' },
+  timerValue: { minWidth: 68, color: colors.text, fontSize: 18, fontWeight: '900', textAlign: 'center' },
   pressed: { opacity: 0.65 },
   disabled: { opacity: 0.45 },
   copy: { flex: 1, paddingRight: spacing.sm },

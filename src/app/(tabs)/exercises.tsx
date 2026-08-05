@@ -48,6 +48,7 @@ export default function ExercisesScreen() {
     setExerciseArchived,
     deleteExercise,
     getExerciseUsage,
+    restTimerSettings,
   } = useActiveWorkout();
   const [query, setQuery] = useState('');
   const [muscle, setMuscle] = useState('All');
@@ -355,6 +356,7 @@ export default function ExercisesScreen() {
       <ExerciseFormModal
         visible={createVisible}
         exercise={null}
+        globalDefaultRestSeconds={restTimerSettings.defaultSeconds}
         onClose={() => setCreateVisible(false)}
         onSave={saveExercise}
       />
@@ -362,6 +364,7 @@ export default function ExercisesScreen() {
       <ExerciseFormModal
         visible={Boolean(editingExercise)}
         exercise={editingExercise}
+        globalDefaultRestSeconds={restTimerSettings.defaultSeconds}
         onClose={() => setEditingExerciseId(null)}
         onSave={saveEditedExercise}
       />
@@ -519,6 +522,7 @@ function ExerciseDetailModal({
                       }
                     />
                   ) : null}
+                  <Detail label="Default rest" value={formatRestTime(exercise.defaultRestSeconds ?? 120)} />
                   {exerciseTypeUsesDuration(exercise.exerciseType) ? (
                     <Detail
                       label="Default duration"
@@ -577,11 +581,13 @@ function ExerciseDetailModal({
 function ExerciseFormModal({
   visible,
   exercise,
+  globalDefaultRestSeconds,
   onClose,
   onSave,
 }: {
   visible: boolean;
   exercise: ExerciseDefinition | null;
+  globalDefaultRestSeconds: number;
   onClose: () => void;
   onSave: (input: CreateExerciseInput) => boolean;
 }) {
@@ -593,6 +599,7 @@ function ExerciseFormModal({
   const [defaultReps, setDefaultReps] = useState('8');
   const [defaultDurationSeconds, setDefaultDurationSeconds] = useState('60');
   const [defaultDistance, setDefaultDistance] = useState('');
+  const [defaultRestSeconds, setDefaultRestSeconds] = useState(String(globalDefaultRestSeconds));
 
   useEffect(() => {
     if (!visible) return;
@@ -608,7 +615,8 @@ function ExerciseFormModal({
     setDefaultDistance(
       exercise?.defaultDistance === undefined ? '' : String(exercise.defaultDistance),
     );
-  }, [exercise, visible]);
+    setDefaultRestSeconds(String(exercise?.defaultRestSeconds ?? globalDefaultRestSeconds));
+  }, [exercise, globalDefaultRestSeconds, visible]);
 
   const submit = () => {
     if (!name.trim()) {
@@ -626,6 +634,7 @@ function ExerciseFormModal({
       ? Number(defaultDurationSeconds)
       : undefined;
     const distance = defaultDistance.trim() ? Number(defaultDistance) : undefined;
+    const restSeconds = defaultRestSeconds.trim() ? Number(defaultRestSeconds) : undefined;
 
     if (exerciseTypeUsesReps(exerciseType) && (!Number.isFinite(reps) || (reps ?? 0) <= 0)) {
       showPrototypeNotice('Invalid reps', 'Default reps must be a number greater than zero.');
@@ -644,6 +653,10 @@ function ExerciseFormModal({
       (!Number.isFinite(durationSeconds) || (durationSeconds ?? 0) <= 0)
     ) {
       showPrototypeNotice('Invalid duration', 'Default duration must be greater than zero seconds.');
+      return;
+    }
+    if (!Number.isFinite(restSeconds) || (restSeconds ?? 0) < 15 || (restSeconds ?? 0) > 3600) {
+      showPrototypeNotice('Invalid rest time', 'Default rest must be between 15 and 3600 seconds.');
       return;
     }
     if (
@@ -666,6 +679,7 @@ function ExerciseFormModal({
         ? durationSeconds
         : undefined,
       defaultDistance: exerciseTypeUsesDistance(exerciseType) ? distance : undefined,
+      defaultRestSeconds: restSeconds,
     });
 
     if (saved) onClose();
@@ -756,6 +770,14 @@ function ExerciseFormModal({
         />
       ) : null}
 
+      <FormField
+        label="Default rest after a set (seconds)"
+        value={defaultRestSeconds}
+        onChangeText={setDefaultRestSeconds}
+        placeholder="120"
+        keyboardType="number-pad"
+      />
+
       <PrimaryButton label={exercise ? 'Save Changes' : 'Create Exercise'} onPress={submit} />
       <PrimaryButton label="Cancel" onPress={onClose} variant="secondary" />
     </KeyboardAwareModal>
@@ -808,6 +830,12 @@ function Detail({ label, value }: { label: string; value: string }) {
 function nextOption<T extends string>(options: readonly T[], current: T): T {
   const currentIndex = options.indexOf(current);
   return options[(currentIndex + 1) % options.length];
+}
+
+function formatRestTime(totalSeconds: number) {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
 function hasUsage(usage: ExerciseUsage) {

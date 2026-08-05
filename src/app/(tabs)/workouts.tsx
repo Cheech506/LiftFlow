@@ -62,6 +62,7 @@ export default function WorkoutsScreen() {
     deleteTemplate,
     startWorkout,
     workout,
+    restTimerSettings,
   } = useActiveWorkout();
   const [selectedTemplate, setSelectedTemplate] = useState<WorkoutTemplate | null>(null);
   const [createVisible, setCreateVisible] = useState(false);
@@ -429,6 +430,7 @@ export default function WorkoutsScreen() {
       <TemplateEditorModal
         exercises={availableExercises}
         template={editingTemplate}
+        globalDefaultRestSeconds={restTimerSettings.defaultSeconds}
         onClose={() => setEditingTemplate(null)}
         onSave={saveUpdatedTemplate}
       />
@@ -1039,11 +1041,13 @@ function CreateTemplateModal({
 function TemplateEditorModal({
   exercises,
   template,
+  globalDefaultRestSeconds,
   onClose,
   onSave,
 }: {
   exercises: ExerciseDefinition[];
   template: WorkoutTemplate | null;
+  globalDefaultRestSeconds: number;
   onClose: () => void;
   onSave: (input: UpdateTemplateInput) => boolean;
 }) {
@@ -1135,6 +1139,15 @@ function TemplateEditorModal({
     );
   };
 
+  const updateExerciseRest = (exerciseId: string, seconds: number) => {
+    const safeSeconds = Math.max(15, Math.min(3600, Math.round(seconds)));
+    setDraftExercises((current) =>
+      current.map((exercise) =>
+        exercise.id === exerciseId ? { ...exercise, restSeconds: safeSeconds } : exercise,
+      ),
+    );
+  };
+
   const addSetToExercise = (exerciseId: string) => {
     setDraftExercises((current) =>
       current.map((exercise) => {
@@ -1202,6 +1215,7 @@ function TemplateEditorModal({
         exerciseDefinitionId: definition.id,
         name: definition.name,
         exerciseType: definition.exerciseType,
+        restSeconds: definition.defaultRestSeconds ?? globalDefaultRestSeconds,
         sets: Array.from({ length: 3 }, (_, index) => ({
           id: `${definition.id}-${stamp}-${index + 1}`,
           weight: exerciseTypeUsesWeight(definition.exerciseType)
@@ -1321,6 +1335,29 @@ function TemplateEditorModal({
                 style={({ pressed }) => [styles.removeButton, pressed && styles.pressed]}
               >
                 <Text style={styles.removeButtonLabel}>Remove</Text>
+              </Pressable>
+            </View>
+          </View>
+
+          <View style={styles.templateRestRow}>
+            <Text style={styles.templateRestLabel}>Rest after sets</Text>
+            <View style={styles.templateRestControls}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Decrease ${exercise.name} rest time by 15 seconds`}
+                onPress={() => updateExerciseRest(exercise.id, (exercise.restSeconds ?? globalDefaultRestSeconds) - 15)}
+                style={({ pressed }) => [styles.restStepButton, pressed && styles.pressed]}
+              >
+                <Text style={styles.restStepLabel}>−15</Text>
+              </Pressable>
+              <Text style={styles.templateRestValue}>{formatRestTime(exercise.restSeconds ?? globalDefaultRestSeconds)}</Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Increase ${exercise.name} rest time by 15 seconds`}
+                onPress={() => updateExerciseRest(exercise.id, (exercise.restSeconds ?? globalDefaultRestSeconds) + 15)}
+                style={({ pressed }) => [styles.restStepButton, pressed && styles.pressed]}
+              >
+                <Text style={styles.restStepLabel}>+15</Text>
               </Pressable>
             </View>
           </View>
@@ -1530,6 +1567,12 @@ function getSetLabel(sets: WorkoutSet[], index: number) {
 function getSetDisplayName(sets: WorkoutSet[], index: number) {
   const label = getSetLabel(sets, index);
   return label === 'W' ? 'Warm-up' : `Set ${label}`;
+}
+
+function formatRestTime(totalSeconds: number) {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
 function formatTemplateSet(set: WorkoutSet, exerciseType: ExerciseType) {
@@ -1910,6 +1953,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.sm,
   },
+  templateRestRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm, marginBottom: spacing.sm, paddingVertical: 8, borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
+  templateRestLabel: { color: colors.textMuted, fontSize: 12, fontWeight: '800' },
+  templateRestControls: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  restStepButton: { minWidth: 46, minHeight: 34, alignItems: 'center', justifyContent: 'center', borderRadius: radius.sm, backgroundColor: colors.surfaceElevated, borderWidth: 1, borderColor: colors.border },
+  restStepLabel: { color: colors.primary, fontSize: 12, fontWeight: '900' },
+  templateRestValue: { minWidth: 52, color: colors.text, fontSize: 14, fontWeight: '900', textAlign: 'center' },
   templateExerciseActions: {
     flexDirection: 'row',
     alignItems: 'center',
