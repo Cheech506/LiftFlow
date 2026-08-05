@@ -29,6 +29,16 @@ import {
   WorkoutSet,
   WorkoutTemplate,
 } from '@/context/ActiveWorkoutContext';
+import {
+  EXERCISE_TYPE_OPTIONS,
+  exerciseTypeUsesDistance,
+  exerciseTypeUsesDuration,
+  exerciseTypeUsesReps,
+  exerciseTypeUsesWeight,
+  formatSetMetrics,
+  getMetricSlots,
+  type WorkoutMetricField,
+} from '@/lib/exerciseTracking';
 import { showPrototypeNotice } from '@/lib/prototypeNotice';
 
 export default function WorkoutsScreen() {
@@ -338,7 +348,7 @@ function TemplatePreviewModal({
                     <Text style={styles.exerciseName}>{exercise.name}</Text>
                     {exercise.sets.map((set, index) => (
                       <Text key={set.id} style={styles.previewSetText}>
-                        {getSetDisplayName(exercise.sets, index)}: {formatTemplateSet(set)}
+                        {getSetDisplayName(exercise.sets, index)}: {formatTemplateSet(set, exercise.exerciseType)}
                       </Text>
                     ))}
                   </View>
@@ -416,6 +426,8 @@ function CreateTemplateModal({
     useState<ExerciseType>('Weight & Reps');
   const [newDefaultWeight, setNewDefaultWeight] = useState('');
   const [newDefaultReps, setNewDefaultReps] = useState('8');
+  const [newDefaultDurationSeconds, setNewDefaultDurationSeconds] = useState('60');
+  const [newDefaultDistance, setNewDefaultDistance] = useState('');
   const [createdMessage, setCreatedMessage] = useState<string | null>(null);
 
   const filteredExercises = useMemo(() => {
@@ -435,6 +447,8 @@ function CreateTemplateModal({
     setNewExerciseType('Weight & Reps');
     setNewDefaultWeight('');
     setNewDefaultReps('8');
+    setNewDefaultDurationSeconds('60');
+    setNewDefaultDistance('');
   };
 
   const closeAndReset = () => {
@@ -470,15 +484,38 @@ function CreateTemplateModal({
       return;
     }
 
-    const reps = Number(newDefaultReps);
+    const reps = newDefaultReps.trim() ? Number(newDefaultReps) : undefined;
     const weight = newDefaultWeight.trim() ? Number(newDefaultWeight) : undefined;
+    const durationSeconds = newDefaultDurationSeconds.trim()
+      ? Number(newDefaultDurationSeconds)
+      : undefined;
+    const distance = newDefaultDistance.trim() ? Number(newDefaultDistance) : undefined;
 
-    if (!Number.isFinite(reps) || reps <= 0) {
+    if (exerciseTypeUsesReps(newExerciseType) && (!Number.isFinite(reps) || (reps ?? 0) <= 0)) {
       showPrototypeNotice('Invalid reps', 'Default reps must be greater than zero.');
       return;
     }
-    if (weight !== undefined && (!Number.isFinite(weight) || weight < 0)) {
+    if (
+      exerciseTypeUsesWeight(newExerciseType) &&
+      weight !== undefined &&
+      (!Number.isFinite(weight) || weight < 0)
+    ) {
       showPrototypeNotice('Invalid weight', 'Default weight must be zero or greater.');
+      return;
+    }
+    if (
+      exerciseTypeUsesDuration(newExerciseType) &&
+      (!Number.isFinite(durationSeconds) || (durationSeconds ?? 0) <= 0)
+    ) {
+      showPrototypeNotice('Invalid duration', 'Default duration must be greater than zero seconds.');
+      return;
+    }
+    if (
+      exerciseTypeUsesDistance(newExerciseType) &&
+      distance !== undefined &&
+      (!Number.isFinite(distance) || distance < 0)
+    ) {
+      showPrototypeNotice('Invalid distance', 'Default distance must be zero or greater.');
       return;
     }
 
@@ -487,8 +524,12 @@ function CreateTemplateModal({
       primaryMuscle: newPrimaryMuscle,
       equipment: newEquipment,
       exerciseType: newExerciseType,
-      defaultWeight: weight,
-      defaultReps: reps,
+      defaultWeight: exerciseTypeUsesWeight(newExerciseType) ? weight : undefined,
+      defaultReps: exerciseTypeUsesReps(newExerciseType) ? reps : undefined,
+      defaultDurationSeconds: exerciseTypeUsesDuration(newExerciseType)
+        ? durationSeconds
+        : undefined,
+      defaultDistance: exerciseTypeUsesDistance(newExerciseType) ? distance : undefined,
     });
 
     if (!created) return;
@@ -623,35 +664,59 @@ function CreateTemplateModal({
           <View style={styles.fieldGroup}>
             <Text style={styles.fieldLabel}>Tracking type</Text>
             <View style={styles.typeChoices}>
-              <TypeChoice
-                label="Weight & Reps"
-                selected={newExerciseType === 'Weight & Reps'}
-                onPress={() => setNewExerciseType('Weight & Reps')}
-              />
-              <TypeChoice
-                label="Bodyweight"
-                selected={newExerciseType === 'Bodyweight'}
-                onPress={() => setNewExerciseType('Bodyweight')}
-              />
+              {EXERCISE_TYPE_OPTIONS.map((option) => (
+                <TypeChoice
+                  key={option}
+                  label={option}
+                  selected={newExerciseType === option}
+                  onPress={() => setNewExerciseType(option)}
+                />
+              ))}
             </View>
           </View>
 
-          {newExerciseType === 'Weight & Reps' ? (
+          {exerciseTypeUsesWeight(newExerciseType) ? (
             <FormField
-              label="Default weight (optional)"
+              label={
+                newExerciseType === 'Bodyweight + Added Weight'
+                  ? 'Default added weight (optional)'
+                  : newExerciseType === 'Assisted Bodyweight'
+                    ? 'Default assistance weight (optional)'
+                    : 'Default weight (optional)'
+              }
               value={newDefaultWeight}
               onChangeText={setNewDefaultWeight}
               placeholder="25"
               keyboardType="decimal-pad"
             />
           ) : null}
-          <FormField
-            label="Default reps"
-            value={newDefaultReps}
-            onChangeText={setNewDefaultReps}
-            placeholder="8"
-            keyboardType="number-pad"
-          />
+          {exerciseTypeUsesReps(newExerciseType) ? (
+            <FormField
+              label="Default reps"
+              value={newDefaultReps}
+              onChangeText={setNewDefaultReps}
+              placeholder="8"
+              keyboardType="number-pad"
+            />
+          ) : null}
+          {exerciseTypeUsesDistance(newExerciseType) ? (
+            <FormField
+              label="Default distance (optional)"
+              value={newDefaultDistance}
+              onChangeText={setNewDefaultDistance}
+              placeholder="1.0"
+              keyboardType="decimal-pad"
+            />
+          ) : null}
+          {exerciseTypeUsesDuration(newExerciseType) ? (
+            <FormField
+              label="Default duration (seconds)"
+              value={newDefaultDurationSeconds}
+              onChangeText={setNewDefaultDurationSeconds}
+              placeholder="60"
+              keyboardType="number-pad"
+            />
+          ) : null}
 
           <PrimaryButton label="Save & Add Exercise" onPress={submitNewExercise} />
           <PrimaryButton
@@ -688,7 +753,7 @@ function CreateTemplateModal({
               <View style={styles.workoutCopy}>
                 <Text style={styles.exerciseName}>{exercise.name}</Text>
                 <Text style={styles.workoutDetail}>
-                  {exercise.detail}
+                  {exercise.detail} · {exercise.exerciseType}
                   {exercise.isCustom ? ' · Custom' : ''}
                 </Text>
               </View>
@@ -744,7 +809,7 @@ function TemplateEditorModal({
   const updateSet = (
     exerciseId: string,
     setId: string,
-    field: 'weight' | 'reps' | 'rpe' | 'rir',
+    field: WorkoutMetricField | 'rpe' | 'rir',
     value: number | undefined,
   ) => {
     setDraftExercises((current) =>
@@ -815,6 +880,8 @@ function TemplateEditorModal({
               id: `${exercise.id}-template-set-${Date.now()}`,
               weight: last?.weight,
               reps: last?.reps,
+              durationSeconds: last?.durationSeconds,
+              distance: last?.distance,
               rpe: last?.rpe,
               rir: last?.rir,
               setType: 'normal',
@@ -864,11 +931,23 @@ function TemplateEditorModal({
       ...current,
       {
         id: `${template?.id ?? 'template'}-${definition.id}-${stamp}`,
+        exerciseDefinitionId: definition.id,
         name: definition.name,
+        exerciseType: definition.exerciseType,
         sets: Array.from({ length: 3 }, (_, index) => ({
           id: `${definition.id}-${stamp}-${index + 1}`,
-          weight: definition.defaultWeight,
-          reps: definition.defaultReps ?? 8,
+          weight: exerciseTypeUsesWeight(definition.exerciseType)
+            ? definition.defaultWeight
+            : undefined,
+          reps: exerciseTypeUsesReps(definition.exerciseType)
+            ? definition.defaultReps ?? 8
+            : undefined,
+          durationSeconds: exerciseTypeUsesDuration(definition.exerciseType)
+            ? definition.defaultDurationSeconds ?? 60
+            : undefined,
+          distance: exerciseTypeUsesDistance(definition.exerciseType)
+            ? definition.defaultDistance
+            : undefined,
           setType: 'normal',
           completed: false,
         })),
@@ -913,7 +992,7 @@ function TemplateEditorModal({
     >
       <Text style={styles.modalTitle}>Edit Template</Text>
       <Text style={styles.modalDetail}>
-        Set the exact weight, reps, and RPE or RIR target for every set. Tap the set label to switch between a working set and a warm-up set.
+        Set the planned values and optional RPE or RIR target for every set. The input columns change automatically for each exercise tracking type. Tap a set label to change its set type.
       </Text>
 
       <FormField
@@ -935,7 +1014,7 @@ function TemplateEditorModal({
             <View style={styles.workoutCopy}>
               <Text style={styles.exerciseName}>{exercise.name}</Text>
               <Text style={styles.workoutDetail}>
-                {exercise.sets.length} planned set{exercise.sets.length === 1 ? '' : 's'}
+                {exercise.exerciseType} · {exercise.sets.length} planned set{exercise.sets.length === 1 ? '' : 's'}
               </Text>
             </View>
             <View style={styles.templateExerciseActions}>
@@ -980,8 +1059,14 @@ function TemplateEditorModal({
 
           <View style={styles.templateSetHeader}>
             <Text style={[styles.templateColumnLabel, styles.templateSetNumberColumn]}>SET</Text>
-            <Text style={[styles.templateColumnLabel, styles.templateInputColumn]}>LB</Text>
-            <Text style={[styles.templateColumnLabel, styles.templateInputColumn]}>REPS</Text>
+            {getMetricSlots(exercise.exerciseType).map((slot, slotIndex) => (
+              <Text
+                key={`${exercise.id}-header-${slotIndex}`}
+                style={[styles.templateColumnLabel, styles.templateInputColumn]}
+              >
+                {slot?.label ?? ''}
+              </Text>
+            ))}
             <Text style={[styles.templateColumnLabel, styles.templateEffortColumn]}>RPE/RIR</Text>
             <Text style={[styles.templateColumnLabel, styles.templateRemoveColumn]}> </Text>
           </View>
@@ -1008,15 +1093,21 @@ function TemplateEditorModal({
                   {getSetLabel(exercise.sets, index)}
                 </Text>
               </Pressable>
-              <CompactNumberInput
-                value={set.weight}
-                decimal
-                onCommit={(value) => updateSet(exercise.id, set.id, 'weight', value)}
-              />
-              <CompactNumberInput
-                value={set.reps}
-                onCommit={(value) => updateSet(exercise.id, set.id, 'reps', value)}
-              />
+              {getMetricSlots(exercise.exerciseType).map((slot, slotIndex) =>
+                slot ? (
+                  <CompactNumberInput
+                    key={`${set.id}-${slot.field}`}
+                    value={set[slot.field]}
+                    decimal={slot.decimal}
+                    onCommit={(value) => updateSet(exercise.id, set.id, slot.field, value)}
+                  />
+                ) : (
+                  <View
+                    key={`${set.id}-empty-${slotIndex}`}
+                    style={styles.templateInputColumn}
+                  />
+                ),
+              )}
               <View style={styles.templateEffortColumn}>
                 <Pressable
                   accessibilityRole="button"
@@ -1095,7 +1186,7 @@ function TemplateEditorModal({
             >
               <View style={styles.workoutCopy}>
                 <Text style={styles.exerciseName}>{exercise.name}</Text>
-                <Text style={styles.workoutDetail}>{exercise.detail}</Text>
+                <Text style={styles.workoutDetail}>{exercise.detail} · {exercise.exerciseType}</Text>
               </View>
               <Text style={styles.addExerciseLabel}>Add</Text>
             </Pressable>
@@ -1173,12 +1264,10 @@ function getSetDisplayName(sets: WorkoutSet[], index: number) {
   return label === 'W' ? 'Warm-up' : `Set ${label}`;
 }
 
-function formatTemplateSet(set: WorkoutSet) {
-  const weight = set.weight === undefined ? '— lb' : `${set.weight} lb`;
-  const reps = set.reps === undefined ? '— reps' : `${set.reps} reps`;
+function formatTemplateSet(set: WorkoutSet, exerciseType: ExerciseType) {
   const effort =
     set.rpe !== undefined ? ` · RPE ${set.rpe}` : set.rir !== undefined ? ` · RIR ${set.rir}` : '';
-  return `${weight} × ${reps}${effort}`;
+  return `${formatSetMetrics(exerciseType, set)}${effort}`;
 }
 
 function TypeChoice({

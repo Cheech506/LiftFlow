@@ -2,7 +2,10 @@ import { useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
+  Keyboard,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -10,7 +13,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   NumericKeyboardAccessory,
@@ -26,6 +29,11 @@ import {
   WorkoutSet,
   WorkoutSetType,
 } from '@/context/ActiveWorkoutContext';
+import {
+  formatPreviousMetrics,
+  getMetricSlots,
+  type WorkoutMetricField,
+} from '@/lib/exerciseTracking';
 
 type DialogType = 'finish' | 'discard' | null;
 type SetMenuState = { exerciseId: string; setId: string } | null;
@@ -48,6 +56,8 @@ function formatDuration(totalSeconds: number) {
 
 export default function ActiveWorkoutScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
+  const topInset = Math.max(insets.top, Platform.OS === 'ios' ? 52 : 0);
   const {
     workout,
     exercises,
@@ -134,26 +144,47 @@ export default function ActiveWorkoutScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <View style={styles.topBar}>
-        <Pressable accessibilityRole="button" accessibilityLabel="Close active workout screen" onPress={() => router.back()} hitSlop={12}>
+    <View style={styles.safeArea}>
+      <View
+        style={[
+          styles.topBar,
+          {
+            minHeight: 56 + topInset,
+            paddingTop: topInset,
+          },
+        ]}
+      >
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Close active workout screen"
+          onPress={() => router.back()}
+          hitSlop={12}
+          style={({ pressed }) => [styles.topBarSide, styles.topBarSideLeft, pressed && styles.pressed]}
+        >
           <Text style={styles.close}>⌄</Text>
         </Pressable>
         <Pressable
           accessibilityRole="button"
+          accessibilityLabel={restSeconds > 0 ? 'Stop rest timer' : 'Start two minute rest timer'}
           onPress={() => (restSeconds > 0 ? clearRestTimer() : setRestTimer(120))}
           style={({ pressed }) => [styles.restButton, pressed && styles.pressed]}
         >
           <Text style={styles.restText}>{restSeconds > 0 ? `Rest ${formatDuration(restSeconds)}` : 'Rest Timer'}</Text>
         </Pressable>
-        <Pressable accessibilityRole="button" accessibilityLabel="Finish workout" onPress={() => setDialog('finish')} hitSlop={12}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Finish workout"
+          onPress={() => setDialog('finish')}
+          hitSlop={12}
+          style={({ pressed }) => [styles.topBarSide, styles.topBarSideRight, pressed && styles.pressed]}
+        >
           <Text style={styles.finish}>Finish</Text>
         </Pressable>
       </View>
 
       <ScrollView
         automaticallyAdjustKeyboardInsets
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[styles.content, { paddingBottom: spacing.xl + insets.bottom }]}
         contentInsetAdjustmentBehavior="automatic"
         keyboardDismissMode="interactive"
         keyboardShouldPersistTaps="handled"
@@ -283,7 +314,7 @@ export default function ActiveWorkoutScreen() {
       />
 
       <NumericKeyboardAccessory />
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -299,7 +330,7 @@ function ExerciseCard({
 }: {
   exercise: WorkoutExercise;
   onToggle: (setId: string) => void;
-  onUpdateValue: (setId: string, field: 'weight' | 'reps', value: number | undefined) => void;
+  onUpdateValue: (setId: string, field: WorkoutMetricField, value: number | undefined) => void;
   onCopyPrevious: (setId: string) => void;
   onAddSet: () => void;
   onOpenSet: (setId: string) => void;
@@ -313,6 +344,7 @@ function ExerciseCard({
       <View style={styles.exerciseHeader}>
         <View style={styles.exerciseHeaderCopy}>
           <Text style={styles.exerciseName}>{exercise.name}</Text>
+          <Text style={styles.exerciseTracking}>{exercise.exerciseType}</Text>
           <Text style={styles.exerciseNote}>Tap a set label for type, effort, move, and delete controls.</Text>
         </View>
         <Pressable accessibilityRole="button" accessibilityLabel={`Open ${exercise.name} actions`} onPress={onOpenMenu} hitSlop={12} style={({ pressed }) => pressed && styles.pressed}>
@@ -332,8 +364,14 @@ function ExerciseCard({
       <View style={styles.tableHeader}>
         <Text style={[styles.columnLabel, styles.setColumn]}>SET</Text>
         <Text style={[styles.columnLabel, styles.previousColumn]}>PREVIOUS</Text>
-        <Text style={[styles.columnLabel, styles.valueColumn]}>LB</Text>
-        <Text style={[styles.columnLabel, styles.valueColumn]}>REPS</Text>
+        {getMetricSlots(exercise.exerciseType).map((slot, slotIndex) => (
+          <Text
+            key={`${exercise.id}-header-${slotIndex}`}
+            style={[styles.columnLabel, styles.valueColumn]}
+          >
+            {slot?.label ?? ''}
+          </Text>
+        ))}
         <Text style={[styles.columnLabel, styles.doneColumn]}>✓</Text>
       </View>
 
@@ -349,10 +387,23 @@ function ExerciseCard({
               <Text style={[styles.setNumber, (set.setType ?? 'normal') !== 'normal' && styles.specialSetNumber]}>{getSetLabel(exercise.sets, index)}</Text>
             </Pressable>
             <Pressable onPress={() => onCopyPrevious(set.id)} style={({ pressed }) => [styles.previousButton, styles.previousColumn, pressed && styles.previousButtonPressed]}>
-              <Text style={styles.previousText}>{set.previousWeight ?? '—'} × {set.previousReps ?? '—'}</Text>
+              <Text style={styles.previousText} numberOfLines={1}>
+                {formatPreviousMetrics(exercise.exerciseType, set)}
+              </Text>
             </Pressable>
-            <SetValueInput value={set.weight} decimal accessibilityLabel={`${exercise.name} set ${index + 1} weight`} onCommit={(value) => onUpdateValue(set.id, 'weight', value)} />
-            <SetValueInput value={set.reps} accessibilityLabel={`${exercise.name} set ${index + 1} reps`} onCommit={(value) => onUpdateValue(set.id, 'reps', value)} />
+            {getMetricSlots(exercise.exerciseType).map((slot, slotIndex) =>
+              slot ? (
+                <SetValueInput
+                  key={`${set.id}-${slot.field}`}
+                  value={set[slot.field]}
+                  decimal={slot.decimal}
+                  accessibilityLabel={`${exercise.name} set ${index + 1} ${slot.label}`}
+                  onCommit={(value) => onUpdateValue(set.id, slot.field, value)}
+                />
+              ) : (
+                <View key={`${set.id}-empty-${slotIndex}`} style={styles.valueColumn} />
+              ),
+            )}
             <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: set.completed }} onPress={() => onToggle(set.id)} style={({ pressed }) => [styles.checkButton, styles.doneColumn, set.completed && styles.checkButtonComplete, pressed && styles.pressed]}>
               <Text style={set.completed ? styles.checkComplete : styles.checkEmpty}>{set.completed ? '✓' : ''}</Text>
             </Pressable>
@@ -416,7 +467,7 @@ function ExercisePickerModal({ title, exercises, visible, disabledNames, onClose
                 <Pressable key={exercise.id} disabled={disabled} onPress={() => onSelect(exercise.id)} style={({ pressed }) => [styles.pickerRow, disabled && styles.pickerRowAdded, pressed && styles.pressed]}>
                   <View style={styles.pickerCopy}>
                     <Text style={styles.pickerName}>{exercise.name}</Text>
-                    <Text style={styles.pickerDetail}>{exercise.detail}</Text>
+                    <Text style={styles.pickerDetail}>{exercise.detail} · {exercise.exerciseType}</Text>
                   </View>
                   <Text style={disabled ? styles.addedLabel : styles.addLabel}>{disabled ? 'In workout' : 'Select'}</Text>
                 </Pressable>
@@ -466,52 +517,97 @@ function SetActionsModal({ exercise, set, onClose, onSetType, onEffort, onMove, 
     const value = Number.parseFloat(effortText.replace(',', '.'));
     if (Number.isFinite(value)) onEffort(effortMode, value);
   };
+  const closeModal = () => {
+    commitEffort();
+    Keyboard.dismiss();
+    onClose();
+  };
   const index = exercise && set ? exercise.sets.findIndex((item) => item.id === set.id) : -1;
+  const visible = Boolean(exercise && set);
+
   return (
-    <Modal transparent visible={Boolean(exercise && set)} animationType="fade" onRequestClose={onClose}>
-      <View style={styles.modalBackdrop}>
-        <View style={styles.modalCardLarge}>
-          {exercise && set ? (
-            <ScrollView keyboardShouldPersistTaps="handled">
-              <Text style={styles.modalTitle}>Set Controls</Text>
-              <Text style={styles.modalBody}>{exercise.name}</Text>
-              <Text style={styles.controlLabel}>Set type</Text>
-              <View style={styles.chipWrap}>
-                {SET_TYPES.map((option) => (
-                  <Pressable key={option.value} onPress={() => onSetType(option.value)} style={[styles.chip, (set.setType ?? 'normal') === option.value && styles.chipActive]}>
-                    <Text style={(set.setType ?? 'normal') === option.value ? styles.chipTextActive : styles.chipText}>{option.label}</Text>
+    <Modal transparent visible={visible} animationType="fade" onRequestClose={closeModal}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={0}
+        style={styles.keyboardModalRoot}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.setControlsCard}>
+            {exercise && set ? (
+              <>
+                <View style={styles.setControlsHeader}>
+                  <View style={styles.setControlsHeaderCopy}>
+                    <Text style={styles.modalTitle}>Set Controls</Text>
+                    <Text style={styles.modalBody}>{exercise.name}</Text>
+                  </View>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Close set controls"
+                    hitSlop={12}
+                    onPress={closeModal}
+                    style={({ pressed }) => [styles.modalCloseButton, pressed && styles.pressed]}
+                  >
+                    <Text style={styles.modalCloseLabel}>Close</Text>
                   </Pressable>
-                ))}
-              </View>
-              <Text style={styles.controlLabel}>Effort</Text>
-              <View style={styles.horizontalButtons}>
-                <SmallAction label="None" active={effortMode === null} onPress={() => { setEffortMode(null); setEffortText(''); onEffort(null); }} />
-                <SmallAction label="RPE" active={effortMode === 'rpe'} onPress={() => setEffortMode('rpe')} />
-                <SmallAction label="RIR" active={effortMode === 'rir'} onPress={() => setEffortMode('rir')} />
-              </View>
-              {effortMode ? (
-                <TextInput
-                  value={effortText}
-                  onChangeText={setEffortText}
-                  onBlur={commitEffort}
-                  onSubmitEditing={commitEffort}
-                  keyboardType="decimal-pad"
-                  inputAccessoryViewID={NUMERIC_KEYBOARD_ACCESSORY_ID}
-                  placeholder={effortMode === 'rpe' ? '0–10 RPE' : 'Reps in reserve'}
-                  placeholderTextColor={colors.textMuted}
-                  style={styles.effortInput}
-                />
-              ) : null}
-              <View style={styles.horizontalButtons}>
-                <SmallAction label="Move Up" disabled={index <= 0} onPress={() => onMove('up')} />
-                <SmallAction label="Move Down" disabled={index < 0 || index >= exercise.sets.length - 1} onPress={() => onMove('down')} />
-              </View>
-              <PrimaryButton label="Delete Set" onPress={onDelete} variant="danger" />
-              <PrimaryButton label="Done" onPress={() => { commitEffort(); onClose(); }} variant="secondary" />
-            </ScrollView>
-          ) : null}
+                </View>
+
+                <ScrollView
+                  automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
+                  contentContainerStyle={styles.setControlsContent}
+                  contentInsetAdjustmentBehavior="automatic"
+                  keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+                  keyboardShouldPersistTaps="handled"
+                  nestedScrollEnabled
+                  showsVerticalScrollIndicator
+                  style={styles.setControlsScroll}
+                >
+                  <Text style={styles.controlLabel}>Set type</Text>
+                  <View style={styles.chipWrap}>
+                    {SET_TYPES.map((option) => (
+                      <Pressable key={option.value} onPress={() => onSetType(option.value)} style={[styles.chip, (set.setType ?? 'normal') === option.value && styles.chipActive]}>
+                        <Text style={(set.setType ?? 'normal') === option.value ? styles.chipTextActive : styles.chipText}>{option.label}</Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                  <Text style={styles.controlLabel}>Effort</Text>
+                  <View style={styles.horizontalButtons}>
+                    <SmallAction label="None" active={effortMode === null} onPress={() => { setEffortMode(null); setEffortText(''); onEffort(null); }} />
+                    <SmallAction label="RPE" active={effortMode === 'rpe'} onPress={() => setEffortMode('rpe')} />
+                    <SmallAction label="RIR" active={effortMode === 'rir'} onPress={() => setEffortMode('rir')} />
+                  </View>
+                  {effortMode ? (
+                    <TextInput
+                      value={effortText}
+                      onChangeText={setEffortText}
+                      onBlur={commitEffort}
+                      onSubmitEditing={() => {
+                        commitEffort();
+                        Keyboard.dismiss();
+                      }}
+                      keyboardType="decimal-pad"
+                      placeholder={effortMode === 'rpe' ? '0–10 RPE' : 'Reps in reserve'}
+                      placeholderTextColor={colors.textMuted}
+                      returnKeyType="done"
+                      selectTextOnFocus
+                      style={styles.effortInput}
+                    />
+                  ) : null}
+                  <View style={styles.horizontalButtons}>
+                    <SmallAction label="Move Up" disabled={index <= 0} onPress={() => onMove('up')} />
+                    <SmallAction label="Move Down" disabled={index < 0 || index >= exercise.sets.length - 1} onPress={() => onMove('down')} />
+                  </View>
+                  <PrimaryButton label="Delete Set" onPress={onDelete} variant="danger" />
+                </ScrollView>
+
+                <View style={styles.setControlsFooter}>
+                  <PrimaryButton label="Done" onPress={closeModal} variant="secondary" />
+                </View>
+              </>
+            ) : null}
+          </View>
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -577,8 +673,11 @@ function formatEffort(set: WorkoutSet) {
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: colors.background },
-  topBar: { minHeight: 56, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.md, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
-  close: { color: colors.text, fontSize: 30, fontWeight: '700' },
+  topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.md, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border, backgroundColor: colors.background },
+  topBarSide: { width: 74, minHeight: 48, justifyContent: 'center' },
+  topBarSideLeft: { alignItems: 'flex-start' },
+  topBarSideRight: { alignItems: 'flex-end' },
+  close: { color: colors.text, fontSize: 30, lineHeight: 34, fontWeight: '700' },
   restButton: { backgroundColor: colors.surfaceElevated, borderRadius: radius.pill, paddingHorizontal: 14, paddingVertical: 8 },
   restText: { color: colors.primary, fontSize: 13, fontWeight: '800' },
   finish: { color: colors.primary, fontSize: 16, fontWeight: '900' },
@@ -599,6 +698,7 @@ const styles = StyleSheet.create({
   exerciseHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: spacing.sm },
   exerciseHeaderCopy: { flex: 1, paddingRight: spacing.sm },
   exerciseName: { color: colors.text, fontSize: 20, fontWeight: '900' },
+  exerciseTracking: { color: colors.primary, fontSize: 12, fontWeight: '800', marginTop: 2 },
   exerciseNote: { color: colors.textMuted, fontSize: 12, marginTop: 4 },
   exerciseNotes: { minHeight: 42, color: colors.text, backgroundColor: colors.surfaceElevated, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, paddingHorizontal: spacing.sm, paddingVertical: 8, marginBottom: spacing.sm },
   menu: { color: colors.textMuted, fontSize: 18, fontWeight: '900' },
@@ -630,6 +730,15 @@ const styles = StyleSheet.create({
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.72)', alignItems: 'center', justifyContent: 'center', padding: spacing.md },
   modalCard: { width: '100%', maxWidth: 500, backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1, borderRadius: radius.lg, padding: spacing.lg, gap: spacing.md },
   modalCardLarge: { width: '100%', maxWidth: 560, maxHeight: '86%', backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1, borderRadius: radius.lg, padding: spacing.lg, gap: spacing.md },
+  keyboardModalRoot: { flex: 1 },
+  setControlsCard: { width: '100%', maxWidth: 560, maxHeight: '88%', overflow: 'hidden', backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1, borderRadius: radius.lg },
+  setControlsHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: spacing.md, paddingHorizontal: spacing.lg, paddingTop: spacing.lg, paddingBottom: spacing.sm, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+  setControlsHeaderCopy: { flex: 1 },
+  modalCloseButton: { minHeight: 40, minWidth: 58, alignItems: 'flex-end', justifyContent: 'center' },
+  modalCloseLabel: { color: colors.primary, fontSize: 15, fontWeight: '900' },
+  setControlsScroll: { flexShrink: 1 },
+  setControlsContent: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm, paddingBottom: spacing.md, gap: spacing.sm },
+  setControlsFooter: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm, paddingBottom: spacing.lg, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, backgroundColor: colors.surface },
   modalTitle: { color: colors.text, fontSize: 24, fontWeight: '900' },
   modalBody: { color: colors.textMuted, fontSize: 14, lineHeight: 20 },
   exercisePickerList: { maxHeight: 480 },

@@ -24,11 +24,18 @@ import {
   ExerciseUsage,
   useActiveWorkout,
 } from '@/context/ActiveWorkoutContext';
+import {
+  EXERCISE_TYPE_OPTIONS,
+  exerciseTypeUsesDistance,
+  exerciseTypeUsesDuration,
+  exerciseTypeUsesReps,
+  exerciseTypeUsesWeight,
+} from '@/lib/exerciseTracking';
 import { showPrototypeNotice } from '@/lib/prototypeNotice';
 
 const muscleOptions = ['All', 'Chest', 'Back', 'Shoulders', 'Quadriceps', 'Hamstrings'];
 const equipmentOptions = ['All', 'Barbell', 'Dumbbell', 'Cable', 'Machine', 'Bodyweight'];
-const typeOptions: Array<'All' | ExerciseType> = ['All', 'Weight & Reps', 'Bodyweight'];
+const typeOptions: Array<'All' | ExerciseType> = ['All', ...EXERCISE_TYPE_OPTIONS];
 const emptyUsage: ExerciseUsage = { templates: 0, completedWorkouts: 0, activeWorkout: false };
 
 export default function ExercisesScreen() {
@@ -404,7 +411,7 @@ function ExerciseRow({
           {exercise.name}
         </Text>
         <Text style={styles.exerciseDetail}>
-          {exercise.detail}
+          {exercise.detail} · {exercise.exerciseType}
           {exercise.isCustom ? ' · Custom' : ''}
           {exercise.archived ? ' · Archived' : ''}
         </Text>
@@ -483,15 +490,39 @@ function ExerciseDetailModal({
                   <Detail label="Primary muscle" value={exercise.primaryMuscle} />
                   <Detail label="Equipment" value={exercise.equipment} />
                   <Detail label="Tracking" value={exercise.exerciseType} />
-                  <Detail label="Default reps" value={String(exercise.defaultReps ?? 8)} />
-                  {exercise.exerciseType === 'Weight & Reps' ? (
+                  {exerciseTypeUsesWeight(exercise.exerciseType) ? (
                     <Detail
-                      label="Default weight"
+                      label={
+                        exercise.exerciseType === 'Bodyweight + Added Weight'
+                          ? 'Default added weight'
+                          : exercise.exerciseType === 'Assisted Bodyweight'
+                            ? 'Default assistance'
+                            : 'Default weight'
+                      }
                       value={
                         exercise.defaultWeight === undefined
                           ? 'Not set'
                           : String(exercise.defaultWeight)
                       }
+                    />
+                  ) : null}
+                  {exerciseTypeUsesReps(exercise.exerciseType) ? (
+                    <Detail label="Default reps" value={String(exercise.defaultReps ?? 8)} />
+                  ) : null}
+                  {exerciseTypeUsesDistance(exercise.exerciseType) ? (
+                    <Detail
+                      label="Default distance"
+                      value={
+                        exercise.defaultDistance === undefined
+                          ? 'Not set'
+                          : String(exercise.defaultDistance)
+                      }
+                    />
+                  ) : null}
+                  {exerciseTypeUsesDuration(exercise.exerciseType) ? (
+                    <Detail
+                      label="Default duration"
+                      value={`${exercise.defaultDurationSeconds ?? 60} sec`}
                     />
                   ) : null}
                 </View>
@@ -560,6 +591,8 @@ function ExerciseFormModal({
   const [exerciseType, setExerciseType] = useState<ExerciseType>('Weight & Reps');
   const [defaultWeight, setDefaultWeight] = useState('');
   const [defaultReps, setDefaultReps] = useState('8');
+  const [defaultDurationSeconds, setDefaultDurationSeconds] = useState('60');
+  const [defaultDistance, setDefaultDistance] = useState('');
 
   useEffect(() => {
     if (!visible) return;
@@ -571,6 +604,10 @@ function ExerciseFormModal({
       exercise?.defaultWeight === undefined ? '' : String(exercise.defaultWeight),
     );
     setDefaultReps(String(exercise?.defaultReps ?? 8));
+    setDefaultDurationSeconds(String(exercise?.defaultDurationSeconds ?? 60));
+    setDefaultDistance(
+      exercise?.defaultDistance === undefined ? '' : String(exercise.defaultDistance),
+    );
   }, [exercise, visible]);
 
   const submit = () => {
@@ -583,15 +620,38 @@ function ExerciseFormModal({
       return;
     }
 
-    const reps = Number(defaultReps);
+    const reps = defaultReps.trim() ? Number(defaultReps) : undefined;
     const weight = defaultWeight.trim() ? Number(defaultWeight) : undefined;
+    const durationSeconds = defaultDurationSeconds.trim()
+      ? Number(defaultDurationSeconds)
+      : undefined;
+    const distance = defaultDistance.trim() ? Number(defaultDistance) : undefined;
 
-    if (!Number.isFinite(reps) || reps <= 0) {
+    if (exerciseTypeUsesReps(exerciseType) && (!Number.isFinite(reps) || (reps ?? 0) <= 0)) {
       showPrototypeNotice('Invalid reps', 'Default reps must be a number greater than zero.');
       return;
     }
-    if (weight !== undefined && (!Number.isFinite(weight) || weight < 0)) {
+    if (
+      exerciseTypeUsesWeight(exerciseType) &&
+      weight !== undefined &&
+      (!Number.isFinite(weight) || weight < 0)
+    ) {
       showPrototypeNotice('Invalid weight', 'Default weight must be zero or greater.');
+      return;
+    }
+    if (
+      exerciseTypeUsesDuration(exerciseType) &&
+      (!Number.isFinite(durationSeconds) || (durationSeconds ?? 0) <= 0)
+    ) {
+      showPrototypeNotice('Invalid duration', 'Default duration must be greater than zero seconds.');
+      return;
+    }
+    if (
+      exerciseTypeUsesDistance(exerciseType) &&
+      distance !== undefined &&
+      (!Number.isFinite(distance) || distance < 0)
+    ) {
+      showPrototypeNotice('Invalid distance', 'Default distance must be zero or greater.');
       return;
     }
 
@@ -600,8 +660,12 @@ function ExerciseFormModal({
       primaryMuscle,
       equipment,
       exerciseType,
-      defaultWeight: weight,
-      defaultReps: reps,
+      defaultWeight: exerciseTypeUsesWeight(exerciseType) ? weight : undefined,
+      defaultReps: exerciseTypeUsesReps(exerciseType) ? reps : undefined,
+      defaultDurationSeconds: exerciseTypeUsesDuration(exerciseType)
+        ? durationSeconds
+        : undefined,
+      defaultDistance: exerciseTypeUsesDistance(exerciseType) ? distance : undefined,
     });
 
     if (saved) onClose();
@@ -638,35 +702,59 @@ function ExerciseFormModal({
       <View style={styles.fieldGroup}>
         <Text style={styles.fieldLabel}>Tracking type</Text>
         <View style={styles.filters}>
-          <FilterChip
-            label="Weight & Reps"
-            active={exerciseType === 'Weight & Reps'}
-            onPress={() => setExerciseType('Weight & Reps')}
-          />
-          <FilterChip
-            label="Bodyweight"
-            active={exerciseType === 'Bodyweight'}
-            onPress={() => setExerciseType('Bodyweight')}
-          />
+          {EXERCISE_TYPE_OPTIONS.map((option) => (
+            <FilterChip
+              key={option}
+              label={option}
+              active={exerciseType === option}
+              onPress={() => setExerciseType(option)}
+            />
+          ))}
         </View>
       </View>
 
-      {exerciseType === 'Weight & Reps' ? (
+      {exerciseTypeUsesWeight(exerciseType) ? (
         <FormField
-          label="Default weight (optional)"
+          label={
+            exerciseType === 'Bodyweight + Added Weight'
+              ? 'Default added weight (optional)'
+              : exerciseType === 'Assisted Bodyweight'
+                ? 'Default assistance weight (optional)'
+                : 'Default weight (optional)'
+          }
           value={defaultWeight}
           onChangeText={setDefaultWeight}
           placeholder="25"
           keyboardType="decimal-pad"
         />
       ) : null}
-      <FormField
-        label="Default reps"
-        value={defaultReps}
-        onChangeText={setDefaultReps}
-        placeholder="8"
-        keyboardType="number-pad"
-      />
+      {exerciseTypeUsesReps(exerciseType) ? (
+        <FormField
+          label="Default reps"
+          value={defaultReps}
+          onChangeText={setDefaultReps}
+          placeholder="8"
+          keyboardType="number-pad"
+        />
+      ) : null}
+      {exerciseTypeUsesDistance(exerciseType) ? (
+        <FormField
+          label="Default distance (optional)"
+          value={defaultDistance}
+          onChangeText={setDefaultDistance}
+          placeholder="1.0"
+          keyboardType="decimal-pad"
+        />
+      ) : null}
+      {exerciseTypeUsesDuration(exerciseType) ? (
+        <FormField
+          label="Default duration (seconds)"
+          value={defaultDurationSeconds}
+          onChangeText={setDefaultDurationSeconds}
+          placeholder="60"
+          keyboardType="number-pad"
+        />
+      ) : null}
 
       <PrimaryButton label={exercise ? 'Save Changes' : 'Create Exercise'} onPress={submit} />
       <PrimaryButton label="Cancel" onPress={onClose} variant="secondary" />

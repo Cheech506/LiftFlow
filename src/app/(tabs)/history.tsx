@@ -16,6 +16,10 @@ import { PrimaryButton } from '@/components/PrimaryButton';
 import { SectionCard } from '@/components/SectionCard';
 import { colors, radius, spacing } from '@/constants/theme';
 import {
+  formatSetMetrics,
+  getMetricSlots,
+} from '@/lib/exerciseTracking';
+import {
   CompletedWorkout,
   useActiveWorkout,
   WorkoutSet,
@@ -214,7 +218,7 @@ function WorkoutDetailModal({ workout, onClose, onEdit, onRepeat, onSaveTemplate
                       <View key={set.id} style={styles.setDetailRow}>
                         <Text style={[styles.setDetailLabel, (set.setType ?? 'normal') !== 'normal' && styles.specialSetDetailLabel]}>{setLabel(exercise.sets, index)}</Text>
                         <View style={styles.setDetailRight}>
-                          <Text style={styles.setDetailValue}>{set.weight ?? '—'} lb × {set.reps ?? '—'} {set.completed ? '✓' : ''}</Text>
+                          <Text style={styles.setDetailValue}>{formatSetMetrics(exercise.exerciseType, set)} {set.completed ? '✓' : ''}</Text>
                           <Text style={styles.setDetailMeta}>{setTypeName(set.setType)} · {effortLabel(set)}</Text>
                         </View>
                       </View>
@@ -267,6 +271,7 @@ function WorkoutEditorModal({ workout, onClose, onSave }: { workout: CompletedWo
             {draft.exercises.map((exercise, exerciseIndex) => (
               <View key={exercise.id} style={styles.editExerciseCard}>
                 <Text style={styles.exerciseName}>{exercise.name}</Text>
+                <Text style={styles.exerciseNotes}>{exercise.exerciseType}</Text>
                 <TextInput
                   value={exercise.notes ?? ''}
                   onChangeText={(notes) => setDraft((current) => current ? {
@@ -282,8 +287,19 @@ function WorkoutEditorModal({ workout, onClose, onSave }: { workout: CompletedWo
                     <Pressable onPress={() => updateSet(exerciseIndex, setIndex, { setType: nextSetType(set.setType) })} style={styles.typePill}>
                       <Text style={styles.typePillText}>{setTypeName(set.setType)}</Text>
                     </Pressable>
-                    <NumericEditor label="LB" value={set.weight} onChange={(weight) => updateSet(exerciseIndex, setIndex, { weight })} />
-                    <NumericEditor label="Reps" value={set.reps} integer onChange={(reps) => updateSet(exerciseIndex, setIndex, { reps })} />
+                    {getMetricSlots(exercise.exerciseType).map((slot, slotIndex) =>
+                      slot ? (
+                        <NumericEditor
+                          key={`${set.id}-${slot.field}`}
+                          label={slot.label}
+                          value={set[slot.field]}
+                          integer={!slot.decimal}
+                          onChange={(value) =>
+                            updateSet(exerciseIndex, setIndex, { [slot.field]: value })
+                          }
+                        />
+                      ) : null,
+                    )}
                     <EffortEditor set={set} onChange={(patch) => updateSet(exerciseIndex, setIndex, patch)} />
                     <Pressable onPress={() => updateSet(exerciseIndex, setIndex, { completed: !set.completed })} style={[styles.completedToggle, set.completed && styles.completedToggleActive]}>
                       <Text style={set.completed ? styles.completedToggleTextActive : styles.completedToggleText}>{set.completed ? 'Completed ✓' : 'Not completed'}</Text>

@@ -1,4 +1,11 @@
-export type ExerciseType = 'Weight & Reps' | 'Bodyweight';
+export type ExerciseType =
+  | 'Weight & Reps'
+  | 'Bodyweight & Reps'
+  | 'Bodyweight + Added Weight'
+  | 'Assisted Bodyweight'
+  | 'Reps Only'
+  | 'Duration'
+  | 'Distance & Duration';
 
 export type ExerciseDefinition = {
   id: string;
@@ -9,6 +16,8 @@ export type ExerciseDefinition = {
   exerciseType: ExerciseType;
   defaultWeight?: number;
   defaultReps?: number;
+  defaultDurationSeconds?: number;
+  defaultDistance?: number;
   favorite?: boolean;
   recent?: boolean;
   isCustom?: boolean;
@@ -89,7 +98,7 @@ export const exerciseLibrary: ExerciseDefinition[] = [
     detail: 'Back · Bodyweight',
     primaryMuscle: 'Back',
     equipment: 'Bodyweight',
-    exerciseType: 'Bodyweight',
+    exerciseType: 'Bodyweight & Reps',
     defaultReps: 8,
   },
   {

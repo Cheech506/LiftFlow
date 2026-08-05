@@ -8,8 +8,12 @@ import type {
   WorkoutSetType,
   WorkoutTemplate,
 } from '@/context/ActiveWorkoutContext';
+import {
+  clearIrrelevantMetrics,
+  normalizeExerciseType,
+} from '@/lib/exerciseTracking';
 
-export const STORAGE_VERSION = 4 as const;
+export const STORAGE_VERSION = 5 as const;
 
 export type PersistedLiftFlowState = LiftFlowStateSnapshot & {
   version: typeof STORAGE_VERSION;
@@ -47,8 +51,12 @@ function normalizeSet(raw: unknown, fallbackId: string): WorkoutSet {
     id: safeString(set.id, fallbackId),
     previousWeight: safeNumber(set.previousWeight),
     previousReps: safeNumber(set.previousReps),
+    previousDurationSeconds: safeNumber(set.previousDurationSeconds),
+    previousDistance: safeNumber(set.previousDistance),
     weight: safeNumber(set.weight),
     reps: safeNumber(set.reps),
+    durationSeconds: safeNumber(set.durationSeconds),
+    distance: safeNumber(set.distance),
     rpe: safeNumber(set.rpe),
     rir: safeNumber(set.rir),
     setType,
@@ -56,39 +64,82 @@ function normalizeSet(raw: unknown, fallbackId: string): WorkoutSet {
   };
 }
 
-function normalizeExercise(raw: unknown, fallbackId: string): WorkoutExercise | null {
+function findDefinition(
+  exercise: Partial<WorkoutExercise>,
+  definitions: ExerciseDefinition[],
+) {
+  const definitionId = safeString(exercise.exerciseDefinitionId);
+  if (definitionId) {
+    const byId = definitions.find((item) => item.id === definitionId);
+    if (byId) return byId;
+  }
+
+  const normalizedName = safeString(exercise.name).trim().toLowerCase();
+  return definitions.find((item) => {
+    const names = [item.name, ...(item.previousNames ?? [])];
+    return names.some((name) => name.trim().toLowerCase() === normalizedName);
+  });
+}
+
+function normalizeExercise(
+  raw: unknown,
+  fallbackId: string,
+  definitions: ExerciseDefinition[],
+): WorkoutExercise | null {
   if (!raw || typeof raw !== 'object') return null;
   const exercise = raw as Partial<WorkoutExercise>;
   const name = safeString(exercise.name).trim();
   if (!name) return null;
+  const definition = findDefinition(exercise, definitions);
+  const exerciseType = normalizeExerciseType(exercise.exerciseType ?? definition?.exerciseType);
   const sets = Array.isArray(exercise.sets)
-    ? exercise.sets.map((set, index) => normalizeSet(set, `${fallbackId}-set-${index + 1}`))
+    ? exercise.sets.map((set, index) =>
+        clearIrrelevantMetrics(
+          normalizeSet(set, `${fallbackId}-set-${index + 1}`),
+          exerciseType,
+        ),
+      )
     : [];
   if (sets.length === 0) {
-    sets.push(normalizeSet({}, `${fallbackId}-set-1`));
+    sets.push(
+      clearIrrelevantMetrics(normalizeSet({}, `${fallbackId}-set-1`), exerciseType),
+    );
   }
   return {
     id: safeString(exercise.id, fallbackId),
+    exerciseDefinitionId:
+      safeString(exercise.exerciseDefinitionId) || definition?.id || undefined,
     name,
+    exerciseType,
     notes: safeString(exercise.notes),
     sets,
   };
 }
 
-function normalizeExercises(raw: unknown, prefix: string): WorkoutExercise[] {
+function normalizeExercises(
+  raw: unknown,
+  prefix: string,
+  definitions: ExerciseDefinition[],
+): WorkoutExercise[] {
   if (!Array.isArray(raw)) return [];
   return raw
-    .map((exercise, index) => normalizeExercise(exercise, `${prefix}-exercise-${index + 1}`))
+    .map((exercise, index) =>
+      normalizeExercise(exercise, `${prefix}-exercise-${index + 1}`, definitions),
+    )
     .filter((exercise): exercise is WorkoutExercise => Boolean(exercise));
 }
 
-function normalizeTemplate(raw: unknown, index: number): WorkoutTemplate | null {
+function normalizeTemplate(
+  raw: unknown,
+  index: number,
+  definitions: ExerciseDefinition[],
+): WorkoutTemplate | null {
   if (!raw || typeof raw !== 'object') return null;
   const template = raw as Partial<WorkoutTemplate>;
   const name = safeString(template.name).trim();
   if (!name) return null;
   const id = safeString(template.id, `template-${index + 1}`);
-  const exercises = normalizeExercises(template.exercises, id);
+  const exercises = normalizeExercises(template.exercises, id, definitions);
   if (exercises.length === 0) return null;
   const setCount = exercises.reduce((total, exercise) => total + exercise.sets.length, 0);
   return {
@@ -100,7 +151,10 @@ function normalizeTemplate(raw: unknown, index: number): WorkoutTemplate | null 
   };
 }
 
-function normalizeActiveWorkout(raw: unknown): ActiveWorkout | null {
+function normalizeActiveWorkout(
+  raw: unknown,
+  definitions: ExerciseDefinition[],
+): ActiveWorkout | null {
   if (!raw || typeof raw !== 'object') return null;
   const workout = raw as Partial<ActiveWorkout>;
   const name = safeString(workout.name).trim();
@@ -112,11 +166,19 @@ function normalizeActiveWorkout(raw: unknown): ActiveWorkout | null {
     sourceTemplateId: safeString(workout.sourceTemplateId) || undefined,
     notes: safeString(workout.notes),
     restTimerEndsAt: safeNumber(workout.restTimerEndsAt),
-    exercises: normalizeExercises(workout.exercises, safeString(workout.id, 'active')),
+    exercises: normalizeExercises(
+      workout.exercises,
+      safeString(workout.id, 'active'),
+      definitions,
+    ),
   };
 }
 
-function normalizeCompletedWorkout(raw: unknown, index: number): CompletedWorkout | null {
+function normalizeCompletedWorkout(
+  raw: unknown,
+  index: number,
+  definitions: ExerciseDefinition[],
+): CompletedWorkout | null {
   if (!raw || typeof raw !== 'object') return null;
   const workout = raw as Partial<CompletedWorkout>;
   const name = safeString(workout.name).trim();
@@ -132,7 +194,7 @@ function normalizeCompletedWorkout(raw: unknown, index: number): CompletedWorkou
     sourceTemplateId: safeString(workout.sourceTemplateId) || undefined,
     sourceFolder: safeString(workout.sourceFolder) || undefined,
     notes: safeString(workout.notes),
-    exercises: normalizeExercises(workout.exercises, id),
+    exercises: normalizeExercises(workout.exercises, id, definitions),
   };
 }
 
@@ -144,7 +206,7 @@ function normalizeDefinition(raw: unknown): ExerciseDefinition | null {
   if (!id || !name) return null;
   const primaryMuscle = safeString(exercise.primaryMuscle, 'Other').trim() || 'Other';
   const equipment = safeString(exercise.equipment, 'Other').trim() || 'Other';
-  const exerciseType = exercise.exerciseType === 'Bodyweight' ? 'Bodyweight' : 'Weight & Reps';
+  const exerciseType = normalizeExerciseType(exercise.exerciseType);
   return {
     id,
     name,
@@ -152,8 +214,24 @@ function normalizeDefinition(raw: unknown): ExerciseDefinition | null {
     primaryMuscle,
     equipment,
     exerciseType,
-    defaultWeight: exerciseType === 'Weight & Reps' ? safeNumber(exercise.defaultWeight) : undefined,
-    defaultReps: safeNumber(exercise.defaultReps) ?? 8,
+    defaultWeight:
+      exerciseType === 'Weight & Reps' ||
+      exerciseType === 'Bodyweight + Added Weight' ||
+      exerciseType === 'Assisted Bodyweight'
+        ? safeNumber(exercise.defaultWeight)
+        : undefined,
+    defaultReps:
+      exerciseType === 'Duration' || exerciseType === 'Distance & Duration'
+        ? undefined
+        : safeNumber(exercise.defaultReps) ?? 8,
+    defaultDurationSeconds:
+      exerciseType === 'Duration' || exerciseType === 'Distance & Duration'
+        ? safeNumber(exercise.defaultDurationSeconds) ?? 60
+        : undefined,
+    defaultDistance:
+      exerciseType === 'Distance & Duration'
+        ? safeNumber(exercise.defaultDistance)
+        : undefined,
     favorite: Boolean(exercise.favorite),
     recent: Boolean(exercise.recent),
     isCustom: Boolean(exercise.isCustom),
@@ -167,28 +245,31 @@ function normalizeDefinition(raw: unknown): ExerciseDefinition | null {
 export function normalizeLiftFlowState(raw: unknown): PersistedLiftFlowState | null {
   if (!raw || typeof raw !== 'object') return null;
   const state = raw as StoredState;
-  if (![1, 2, 3, STORAGE_VERSION].includes(state.version ?? 0)) return null;
+  if (![1, 2, 3, 4, STORAGE_VERSION].includes(state.version ?? 0)) return null;
   if (!Array.isArray(state.templates) || !Array.isArray(state.completedWorkouts)) return null;
 
   const exercises = Array.isArray(state.exercises)
-    ? state.exercises.map(normalizeDefinition).filter((item): item is ExerciseDefinition => Boolean(item))
+    ? state.exercises
+        .map(normalizeDefinition)
+        .filter((item): item is ExerciseDefinition => Boolean(item))
     : exerciseLibrary;
+  const safeExercises = exercises.length > 0 ? exercises : exerciseLibrary;
 
   const templates = state.templates
-    .map((template, index) => normalizeTemplate(template, index))
+    .map((template, index) => normalizeTemplate(template, index, safeExercises))
     .filter((template): template is WorkoutTemplate => Boolean(template));
 
   const completedWorkouts = state.completedWorkouts
-    .map((workout, index) => normalizeCompletedWorkout(workout, index))
+    .map((workout, index) => normalizeCompletedWorkout(workout, index, safeExercises))
     .filter((workout): workout is CompletedWorkout => Boolean(workout));
 
   return {
     version: STORAGE_VERSION,
     app: 'LiftFlow',
     exportedAt: safeNumber(state.exportedAt),
-    exercises: exercises.length > 0 ? exercises : exerciseLibrary,
+    exercises: safeExercises,
     templates,
-    activeWorkout: normalizeActiveWorkout(state.activeWorkout),
+    activeWorkout: normalizeActiveWorkout(state.activeWorkout, safeExercises),
     completedWorkouts,
   };
 }
