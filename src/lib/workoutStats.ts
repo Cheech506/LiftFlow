@@ -6,14 +6,39 @@ export function getCompletedSets(workout: CompletedWorkout): WorkoutSet[] {
   );
 }
 
+export const MAX_E1RM_REPS = 12;
+
+export function getWorkoutDateTimestamp(workout: CompletedWorkout): number {
+  return workout.startedAt;
+}
+
 export function getWorkoutDurationSeconds(workout: CompletedWorkout): number {
+  if (workout.durationUnknown) return 0;
   return Math.max(0, Math.floor((workout.completedAt - workout.startedAt) / 1000));
 }
 
+export function estimateOneRepMax(weight: number, reps: number): number | undefined {
+  if (!Number.isFinite(weight) || !Number.isFinite(reps)) return undefined;
+  if (weight <= 0 || reps <= 0 || reps > MAX_E1RM_REPS) return undefined;
+  return weight * (1 + reps / 30);
+}
+
 export function getWorkoutVolume(workout: CompletedWorkout): number {
-  return getCompletedSets(workout).reduce((total, set) => {
-    if (set.weight === undefined || set.reps === undefined) return total;
-    return total + set.weight * set.reps;
+  return workout.exercises.reduce((workoutTotal, exercise) => {
+    if (
+      exercise.exerciseType !== 'Weight & Reps' &&
+      exercise.exerciseType !== 'Bodyweight + Added Weight'
+    ) {
+      return workoutTotal;
+    }
+
+    const exerciseVolume = exercise.sets.reduce((total, set) => {
+      if (!set.completed || (set.setType ?? 'normal') === 'warmup') return total;
+      if (set.weight === undefined || set.reps === undefined) return total;
+      return total + set.weight * set.reps;
+    }, 0);
+
+    return workoutTotal + exerciseVolume;
   }, 0);
 }
 
@@ -36,5 +61,8 @@ export function getMondayStart(timestamp = Date.now()): number {
 }
 
 export function isInCurrentWeek(workout: CompletedWorkout): boolean {
-  return workout.completedAt >= getMondayStart();
+  const weekStart = getMondayStart();
+  const nextWeek = weekStart + 7 * 24 * 60 * 60 * 1000;
+  const workoutDate = getWorkoutDateTimestamp(workout);
+  return workoutDate >= weekStart && workoutDate < nextWeek;
 }

@@ -1,11 +1,13 @@
 import { useRouter } from 'expo-router';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { colors, radius, spacing } from '@/constants/theme';
 import { useActiveWorkout } from '@/context/ActiveWorkoutContext';
 
 export function ActiveWorkoutBar() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { workout, completedSetCount, totalSetCount } = useActiveWorkout();
 
   if (!workout) return null;
@@ -15,7 +17,11 @@ export function ActiveWorkoutBar() {
       accessibilityRole="button"
       accessibilityLabel={`Resume ${workout.name}`}
       onPress={() => router.push('/active-workout')}
-      style={({ pressed }) => [styles.bar, pressed && styles.pressed]}
+      style={({ pressed }) => [
+        styles.bar,
+        { bottom: 61 + insets.bottom },
+        pressed && styles.pressed,
+      ]}
     >
       <View style={styles.copy}>
         <Text numberOfLines={1} style={styles.name}>
@@ -35,7 +41,6 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: spacing.sm,
     right: spacing.sm,
-    bottom: 69,
     minHeight: 58,
     zIndex: 50,
     flexDirection: 'row',

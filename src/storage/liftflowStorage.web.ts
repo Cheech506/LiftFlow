@@ -1,60 +1,45 @@
-import type {
-  ActiveWorkout,
-  CompletedWorkout,
-  WorkoutTemplate,
-} from '@/context/ActiveWorkoutContext';
+import type { LiftFlowStateSnapshot } from '@/context/ActiveWorkoutContext';
+import {
+  parseLiftFlowBackup,
+  parseStoredState,
+  STORAGE_VERSION,
+  type PersistedLiftFlowState,
+} from './liftflowStorageCore';
 
 const STORAGE_KEY = 'liftflow.local-state';
-const STORAGE_VERSION = 1;
-
-export type PersistedLiftFlowState = {
-  version: typeof STORAGE_VERSION;
-  templates: WorkoutTemplate[];
-  activeWorkout: ActiveWorkout | null;
-  completedWorkouts: CompletedWorkout[];
-};
+const BACKUP_STORAGE_KEY = 'liftflow.local-state.backup';
 
 function getStorage() {
-  if (!globalThis.localStorage) {
-    throw new Error('Persistent local storage is unavailable in this browser.');
-  }
-
+  if (!globalThis.localStorage) throw new Error('Persistent local storage is unavailable in this browser.');
   return globalThis.localStorage;
 }
 
 export async function loadLiftFlowState(): Promise<PersistedLiftFlowState | null> {
-  const storedValue = getStorage().getItem(STORAGE_KEY);
-  if (!storedValue) return null;
-
-  const parsed = JSON.parse(storedValue) as Partial<PersistedLiftFlowState>;
-
-  if (
-    parsed.version !== STORAGE_VERSION ||
-    !Array.isArray(parsed.templates) ||
-    !Array.isArray(parsed.completedWorkouts)
-  ) {
-    return null;
-  }
-
-  return {
-    version: STORAGE_VERSION,
-    templates: parsed.templates,
-    activeWorkout: parsed.activeWorkout ?? null,
-    completedWorkouts: parsed.completedWorkouts,
-  };
+  const storage = getStorage();
+  return parseStoredState(storage.getItem(STORAGE_KEY)) ?? parseStoredState(storage.getItem(BACKUP_STORAGE_KEY));
 }
 
-export async function saveLiftFlowState(
-  state: Omit<PersistedLiftFlowState, 'version'>,
-): Promise<void> {
+export async function saveLiftFlowState(state: LiftFlowStateSnapshot): Promise<void> {
+  const storage = getStorage();
+  const existing = storage.getItem(STORAGE_KEY);
+  if (existing) storage.setItem(BACKUP_STORAGE_KEY, existing);
   const payload: PersistedLiftFlowState = {
     version: STORAGE_VERSION,
+    app: 'LiftFlow',
     ...state,
   };
+  storage.setItem(STORAGE_KEY, JSON.stringify(payload));
+}
 
-  getStorage().setItem(STORAGE_KEY, JSON.stringify(payload));
+export async function saveLiftFlowSafetyBackup(state: LiftFlowStateSnapshot): Promise<void> {
+  const payload: PersistedLiftFlowState = { version: STORAGE_VERSION, app: 'LiftFlow', ...state };
+  getStorage().setItem(BACKUP_STORAGE_KEY, JSON.stringify(payload));
 }
 
 export async function clearLiftFlowState(): Promise<void> {
-  getStorage().removeItem(STORAGE_KEY);
+  const storage = getStorage();
+  storage.removeItem(STORAGE_KEY);
+  storage.removeItem(BACKUP_STORAGE_KEY);
 }
+
+export { parseLiftFlowBackup, type PersistedLiftFlowState };

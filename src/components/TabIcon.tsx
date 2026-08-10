@@ -1,17 +1,13 @@
-import { StyleSheet, Text, type ColorValue } from 'react-native';
+import Ionicons from '@expo/vector-icons/Ionicons';
+import type { ComponentProps } from 'react';
+import type { ColorValue } from 'react-native';
 
 type TabIconProps = {
-  symbol: string;
+  name: ComponentProps<typeof Ionicons>['name'];
   color: ColorValue;
+  focused?: boolean;
 };
 
-export function TabIcon({ symbol, color }: TabIconProps) {
-  return <Text style={[styles.icon, { color }]}>{symbol}</Text>;
+export function TabIcon({ name, color, focused = false }: TabIconProps) {
+  return <Ionicons color={color} name={name} size={focused ? 23 : 22} />;
 }
-
-const styles = StyleSheet.create({
-  icon: {
-    fontSize: 18,
-    lineHeight: 22,
-  },
-});
