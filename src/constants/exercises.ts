@@ -19,11 +19,14 @@ export type ExerciseDefinition = {
   defaultDurationSeconds?: number;
   defaultDistance?: number;
   defaultRestSeconds?: number;
+  instructions?: string;
   favorite?: boolean;
   recent?: boolean;
   isCustom?: boolean;
   archived?: boolean;
   previousNames?: string[];
+  importSource?: 'strong';
+  importBatchId?: string;
 };
 
 export const exerciseLibrary: ExerciseDefinition[] = [

@@ -41,6 +41,7 @@ import {
   type WorkoutMetricField,
 } from '@/lib/exerciseTracking';
 import { showPrototypeNotice } from '@/lib/prototypeNotice';
+import { createUuid } from '@/lib/ids';
 
 export default function WorkoutsScreen() {
   const router = useRouter();
@@ -48,11 +49,14 @@ export default function WorkoutsScreen() {
     exercises,
     folders,
     templates,
+    incompleteWorkouts,
+    completedWorkouts,
     createExercise,
     createFolder,
     renameFolder,
     deleteFolder,
     moveFolder,
+    setFolderArchived,
     createTemplate,
     updateTemplate,
     duplicateTemplate,
@@ -61,6 +65,8 @@ export default function WorkoutsScreen() {
     setTemplateArchived,
     deleteTemplate,
     startWorkout,
+    resumeIncompleteWorkout,
+    deleteIncompleteWorkout,
     workout,
     restTimerSettings,
   } = useActiveWorkout();
@@ -72,19 +78,48 @@ export default function WorkoutsScreen() {
   const [folderEditor, setFolderEditor] = useState<WorkoutFolder | 'new' | null>(null);
   const [moveTarget, setMoveTarget] = useState<WorkoutTemplate | null>(null);
   const [showArchived, setShowArchived] = useState(false);
+  const [query, setQuery] = useState('');
 
   const availableExercises = useMemo(
     () => exercises.filter((exercise) => !exercise.archived),
     [exercises],
   );
-  const activeTemplates = useMemo(
-    () => templates.filter((template) => !template.archived),
-    [templates],
+  const activeFolders = useMemo(() => folders.filter((folder) => !folder.archived), [folders]);
+  const archivedFolders = useMemo(() => folders.filter((folder) => folder.archived), [folders]);
+  const archivedFolderNames = useMemo(
+    () => new Set(archivedFolders.map((folder) => folder.name)),
+    [archivedFolders],
   );
+  const activeTemplates = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    return templates.filter((template) =>
+      !template.archived &&
+      !archivedFolderNames.has(template.folder) &&
+      (!normalizedQuery ||
+        template.name.toLowerCase().includes(normalizedQuery) ||
+        template.folder.toLowerCase().includes(normalizedQuery) ||
+        template.exercises.some((exercise) => exercise.name.toLowerCase().includes(normalizedQuery))),
+    );
+  }, [archivedFolderNames, query, templates]);
   const archivedTemplates = useMemo(
-    () => templates.filter((template) => template.archived),
-    [templates],
+    () => templates.filter((template) => template.archived && !archivedFolderNames.has(template.folder)),
+    [archivedFolderNames, templates],
   );
+  const unfiledTemplates = useMemo(
+    () => activeTemplates.filter((template) => !template.folder),
+    [activeTemplates],
+  );
+  const recentTemplates = useMemo(() => {
+    const usedIds = completedWorkouts
+      .filter((item) => item.sourceTemplateId)
+      .sort((left, right) => right.startedAt - left.startedAt)
+      .map((item) => item.sourceTemplateId as string);
+    return [...usedIds.map((id) => activeTemplates.find((template) => template.id === id)), ...activeTemplates]
+      .filter((template, index, list) =>
+        Boolean(template) && list.findIndex((candidate) => candidate?.id === template?.id) === index,
+      )
+      .slice(0, 3) as WorkoutTemplate[];
+  }, [activeTemplates, completedWorkouts]);
 
   const begin = (template: WorkoutTemplate) => {
     if (workout) {
@@ -266,12 +301,45 @@ export default function WorkoutsScreen() {
     );
   };
 
-  const recentTemplates = activeTemplates.slice(-2).reverse();
-
   return (
     <>
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <PrimaryButton label="Start Empty Workout" onPress={startEmpty} />
+
+        <TextInput
+          accessibilityLabel="Search workout templates"
+          value={query}
+          onChangeText={setQuery}
+          placeholder="Search templates, folders, or exercises"
+          placeholderTextColor={colors.textMuted}
+          style={styles.search}
+        />
+
+        {incompleteWorkouts.length > 0 ? (
+          <SectionCard title={`Incomplete Workouts · ${incompleteWorkouts.length}`}>
+            {incompleteWorkouts.map((incomplete) => (
+              <View key={incomplete.id} style={styles.incompleteRow}>
+                <View style={styles.workoutCopy}>
+                  <Text style={styles.workoutName}>{incomplete.name}</Text>
+                  <Text style={styles.workoutDetail}>{incomplete.exercises.length} exercises · saved {formatSavedWorkoutTime(incomplete.savedAt)}</Text>
+                </View>
+                <Pressable onPress={() => {
+                  if (workout) {
+                    showPrototypeNotice('Workout already in progress', `${workout.name} must be finished or saved for later first.`);
+                    router.push('/active-workout');
+                    return;
+                  }
+                  if (resumeIncompleteWorkout(incomplete.id)) router.push('/active-workout');
+                }} style={styles.compactActionButton}>
+                  <Text style={styles.compactActionLabel}>Resume</Text>
+                </Pressable>
+                <Pressable onPress={() => confirmAction('Delete incomplete workout?', `${incomplete.name} and its unfinished sets will be removed.`, 'Delete', () => deleteIncompleteWorkout(incomplete.id))} style={[styles.compactActionButton, styles.compactDangerButton]}>
+                  <Text style={styles.compactDangerLabel}>Delete</Text>
+                </Pressable>
+              </View>
+            ))}
+          </SectionCard>
+        ) : null}
 
         {recentTemplates.length > 0 ? (
           <SectionCard title="Recent">
@@ -287,7 +355,7 @@ export default function WorkoutsScreen() {
           </SectionCard>
         ) : null}
 
-        {folders.map((folder) => {
+        {activeFolders.map((folder) => {
           const folderTemplates = activeTemplates.filter((template) => template.folder === folder.name);
           return (
             <SectionCard
@@ -318,6 +386,27 @@ export default function WorkoutsScreen() {
           );
         })}
 
+        {unfiledTemplates.length > 0 ? (
+          <SectionCard title="Unfiled Templates">
+            {unfiledTemplates.map((template) => (
+              <WorkoutRow
+                key={template.id}
+                template={template}
+                onPreview={() => setSelectedTemplate(template)}
+                onManage={() => setTemplateActions(template)}
+                onStart={() => begin(template)}
+              />
+            ))}
+          </SectionCard>
+        ) : null}
+
+        {query.trim() && activeTemplates.length === 0 ? (
+          <SectionCard title="No matching templates">
+            <Text style={styles.emptyFolderText}>Try another search or clear the search field.</Text>
+            <PrimaryButton label="Clear Search" onPress={() => setQuery('')} variant="secondary" />
+          </SectionCard>
+        ) : null}
+
         <PrimaryButton label="+ New Folder" onPress={() => setFolderEditor('new')} variant="secondary" />
         <PrimaryButton label="+ New Template" onPress={() => setCreateVisible(true)} variant="secondary" />
 
@@ -344,14 +433,45 @@ export default function WorkoutsScreen() {
             )) : null}
           </SectionCard>
         ) : null}
+
+        {archivedFolders.length > 0 ? (
+          <SectionCard title={`Archived Folders · ${archivedFolders.length}`}>
+            {archivedFolders.map((folder) => {
+              const count = templates.filter((template) => template.folder === folder.name).length;
+              return (
+                <View key={folder.id} style={styles.archivedRow}>
+                  <View style={styles.workoutCopy}>
+                    <Text style={styles.workoutName}>{folder.name}</Text>
+                    <Text style={styles.workoutDetail}>{count} template{count === 1 ? '' : 's'} preserved</Text>
+                  </View>
+                  <Pressable onPress={() => setFolderArchived(folder.id, false)} style={styles.compactActionButton}>
+                    <Text style={styles.compactActionLabel}>Restore</Text>
+                  </Pressable>
+                  {count === 0 ? (
+                    <Pressable onPress={() => removeFolder(folder)} style={[styles.compactActionButton, styles.compactDangerButton]}>
+                      <Text style={styles.compactDangerLabel}>Delete</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+              );
+            })}
+          </SectionCard>
+        ) : null}
       </ScrollView>
 
       <TemplatePreviewModal
         template={selectedTemplate}
+        historyCount={selectedTemplate ? completedWorkouts.filter((item) => item.sourceTemplateId === selectedTemplate.id).length : 0}
         onClose={() => setSelectedTemplate(null)}
         onStart={() => selectedTemplate && begin(selectedTemplate)}
         onEdit={() => selectedTemplate && editTemplate(selectedTemplate)}
         onDelete={() => selectedTemplate && removeTemplate(selectedTemplate)}
+        onHistory={() => {
+          if (!selectedTemplate) return;
+          const templateId = selectedTemplate.id;
+          setSelectedTemplate(null);
+          router.push({ pathname: '/(tabs)/history', params: { templateId } });
+        }}
       />
 
       <TemplateActionsModal
@@ -397,6 +517,11 @@ export default function WorkoutsScreen() {
           moveFolder(folderActions.id, 'down');
           setFolderActions(null);
         }}
+        onArchive={() => {
+          if (!folderActions) return;
+          setFolderArchived(folderActions.id, true);
+          setFolderActions(null);
+        }}
         onDelete={() => folderActions && removeFolder(folderActions)}
       />
 
@@ -410,7 +535,7 @@ export default function WorkoutsScreen() {
 
       <MoveTemplateModal
         template={moveTarget}
-        folders={folders}
+        folders={activeFolders}
         onClose={() => setMoveTarget(null)}
         onMove={(folderName) => {
           if (!moveTarget) return;
@@ -477,16 +602,20 @@ function WorkoutRow({
 
 function TemplatePreviewModal({
   template,
+  historyCount,
   onClose,
   onStart,
   onEdit,
   onDelete,
+  onHistory,
 }: {
   template: WorkoutTemplate | null;
+  historyCount: number;
   onClose: () => void;
   onStart: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  onHistory: () => void;
 }) {
   return (
     <Modal transparent visible={Boolean(template)} animationType="fade" onRequestClose={onClose}>
@@ -500,6 +629,7 @@ function TemplatePreviewModal({
               <ScrollView style={styles.exerciseList}>
                 {template.exercises.map((exercise) => (
                   <View key={exercise.id} style={styles.previewExercise}>
+                    {exercise.supersetId ? <Text style={styles.templateSupersetBadge}>SUPERSET</Text> : null}
                     <Text style={styles.exerciseName}>{exercise.name}</Text>
                     {exercise.sets.map((set, index) => (
                       <Text key={set.id} style={styles.previewSetText}>
@@ -509,6 +639,7 @@ function TemplatePreviewModal({
                   </View>
                 ))}
               </ScrollView>
+              <PrimaryButton label={`Workout History (${historyCount})`} onPress={onHistory} variant="secondary" />
               <PrimaryButton label="Edit Template" onPress={onEdit} variant="secondary" />
               <PrimaryButton label="Start Workout" onPress={onStart} />
               <PrimaryButton label="Delete Template" onPress={onDelete} variant="danger" />
@@ -571,12 +702,13 @@ function TemplateActionsModal({
   );
 }
 
-function FolderActionsModal({ folder, onClose, onRename, onMoveUp, onMoveDown, onDelete }: {
+function FolderActionsModal({ folder, onClose, onRename, onMoveUp, onMoveDown, onArchive, onDelete }: {
   folder: WorkoutFolder | null;
   onClose: () => void;
   onRename: () => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
+  onArchive: () => void;
   onDelete: () => void;
 }) {
   return (
@@ -592,6 +724,7 @@ function FolderActionsModal({ folder, onClose, onRename, onMoveUp, onMoveDown, o
                 <PrimaryButton label="Move Up" onPress={onMoveUp} variant="secondary" style={styles.halfButton} />
                 <PrimaryButton label="Move Down" onPress={onMoveDown} variant="secondary" style={styles.halfButton} />
               </View>
+              <PrimaryButton label="Archive Folder" onPress={onArchive} variant="secondary" />
               <PrimaryButton label="Delete Empty Folder" onPress={onDelete} variant="danger" />
               <PrimaryButton label="Cancel" onPress={onClose} variant="secondary" />
             </>
@@ -643,8 +776,21 @@ function MoveTemplateModal({ template, folders, onClose, onMove }: {
           {template ? (
             <>
               <Text style={styles.actionsTitle}>Move {template.name}</Text>
-              <Text style={styles.actionsSubtitle}>Current folder: {template.folder}</Text>
+              <Text style={styles.actionsSubtitle}>Current folder: {template.folder || 'Unfiled'}</Text>
               <ScrollView style={styles.folderChoiceList}>
+                <Pressable
+                  disabled={!template.folder}
+                  onPress={() => onMove('')}
+                  style={({ pressed }) => [
+                    styles.folderChoice,
+                    !template.folder && styles.folderChoiceSelected,
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  <Text style={[styles.folderChoiceLabel, !template.folder && styles.folderChoiceLabelSelected]}>
+                    Unfiled{!template.folder ? ' · Current' : ''}
+                  </Text>
+                </Pressable>
                 {folders.map((folder) => (
                   <Pressable
                     key={folder.id}
@@ -684,7 +830,7 @@ function CreateTemplateModal({
   onSave: (input: CreateTemplateInput) => boolean;
 }) {
   const [name, setName] = useState('');
-  const [folder, setFolder] = useState('My Workouts');
+  const [folder, setFolder] = useState('');
   const [query, setQuery] = useState('');
   const [selectedExerciseIds, setSelectedExerciseIds] = useState<string[]>([]);
   const [setCount, setSetCount] = useState(3);
@@ -723,7 +869,7 @@ function CreateTemplateModal({
 
   const closeAndReset = () => {
     setName('');
-    setFolder('My Workouts');
+    setFolder('');
     setQuery('');
     setSelectedExerciseIds([]);
     setSetCount(3);
@@ -818,10 +964,6 @@ function CreateTemplateModal({
       showPrototypeNotice('Template name required', 'Enter a name for the workout template.');
       return;
     }
-    if (!folder.trim()) {
-      showPrototypeNotice('Folder required', 'Enter a folder or split name.');
-      return;
-    }
     if (selectedExerciseIds.length === 0) {
       showPrototypeNotice('Choose exercises', 'Select at least one exercise for the template.');
       return;
@@ -846,7 +988,7 @@ function CreateTemplateModal({
     >
       <Text style={styles.modalTitle}>New Template</Text>
       <Text style={styles.modalDetail}>
-        Choose a name, folder, exercises, and the starting number of sets.
+        Choose a name, optional folder, exercises, and the starting number of sets.
       </Text>
 
       <FormField
@@ -856,7 +998,7 @@ function CreateTemplateModal({
         placeholder="Upper A"
       />
       <FormField
-        label="Folder / split"
+        label="Folder / split (optional)"
         value={folder}
         onChangeText={setFolder}
         placeholder="Upper / Lower"
@@ -1052,14 +1194,14 @@ function TemplateEditorModal({
   onSave: (input: UpdateTemplateInput) => boolean;
 }) {
   const [name, setName] = useState('');
-  const [folder, setFolder] = useState('My Workouts');
+  const [folder, setFolder] = useState('');
   const [draftExercises, setDraftExercises] = useState<WorkoutExercise[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [query, setQuery] = useState('');
 
   const resetFromTemplate = (nextTemplate: WorkoutTemplate | null) => {
     setName(nextTemplate?.name ?? '');
-    setFolder(nextTemplate?.folder ?? 'My Workouts');
+    setFolder(nextTemplate?.folder ?? '');
     setDraftExercises(
       nextTemplate?.exercises.map((exercise) => ({
         ...exercise,
@@ -1158,7 +1300,7 @@ function TemplateEditorModal({
           sets: [
             ...exercise.sets,
             {
-              id: `${exercise.id}-template-set-${Date.now()}`,
+              id: createUuid(),
               weight: last?.weight,
               reps: last?.reps,
               durationSeconds: last?.durationSeconds,
@@ -1202,22 +1344,42 @@ function TemplateEditorModal({
   };
 
   const removeExerciseFromTemplate = (exerciseId: string) => {
-    setDraftExercises((current) => current.filter((exercise) => exercise.id !== exerciseId));
+    setDraftExercises((current) => normalizeDraftSupersets(current.filter((exercise) => exercise.id !== exerciseId)));
+  };
+
+  const toggleTemplateSuperset = (exerciseId: string) => {
+    setDraftExercises((current) => {
+      const index = current.findIndex((exercise) => exercise.id === exerciseId);
+      if (index < 0) return current;
+      const selected = current[index];
+      if (selected.supersetId) {
+        return normalizeDraftSupersets(current.map((exercise) =>
+          exercise.id === exerciseId ? { ...exercise, supersetId: undefined } : exercise,
+        ));
+      }
+      const partner = current[index + 1] ?? current[index - 1];
+      if (!partner) return current;
+      const groupId = partner.supersetId ?? createUuid();
+      return current.map((exercise) =>
+        exercise.id === exerciseId || exercise.id === partner.id
+          ? { ...exercise, supersetId: groupId }
+          : exercise,
+      );
+    });
   };
 
   const addExerciseToTemplate = (definition: ExerciseDefinition) => {
     if (draftExercises.some((exercise) => exercise.name === definition.name)) return;
-    const stamp = Date.now();
     setDraftExercises((current) => [
       ...current,
       {
-        id: `${template?.id ?? 'template'}-${definition.id}-${stamp}`,
+        id: createUuid(),
         exerciseDefinitionId: definition.id,
         name: definition.name,
         exerciseType: definition.exerciseType,
         restSeconds: definition.defaultRestSeconds ?? globalDefaultRestSeconds,
         sets: Array.from({ length: 3 }, (_, index) => ({
-          id: `${definition.id}-${stamp}-${index + 1}`,
+          id: createUuid(),
           weight: exerciseTypeUsesWeight(definition.exerciseType)
             ? definition.defaultWeight
             : undefined,
@@ -1284,7 +1446,7 @@ function TemplateEditorModal({
         placeholder="Upper A"
       />
       <FormField
-        label="Folder / split"
+        label="Folder / split (optional)"
         value={folder}
         onChangeText={setFolder}
         placeholder="Upper / Lower"
@@ -1294,6 +1456,7 @@ function TemplateEditorModal({
         <View key={exercise.id} style={styles.templateExerciseCard}>
           <View style={styles.templateExerciseHeader}>
             <View style={styles.workoutCopy}>
+              {exercise.supersetId ? <Text style={styles.templateSupersetBadge}>SUPERSET</Text> : null}
               <Text style={styles.exerciseName}>{exercise.name}</Text>
               <Text style={styles.workoutDetail}>
                 {exercise.exerciseType} · {exercise.sets.length} planned set{exercise.sets.length === 1 ? '' : 's'}
@@ -1338,6 +1501,14 @@ function TemplateEditorModal({
               </Pressable>
             </View>
           </View>
+
+          {exercise.supersetId || draftExercises.length > 1 ? (
+            <PrimaryButton
+              label={exercise.supersetId ? 'Remove from Superset' : 'Superset with Adjacent Exercise'}
+              onPress={() => toggleTemplateSuperset(exercise.id)}
+              variant="secondary"
+            />
+          ) : null}
 
           <View style={styles.templateRestRow}>
             <Text style={styles.templateRestLabel}>Rest after sets</Text>
@@ -1553,6 +1724,18 @@ function CompactNumberInput({
   );
 }
 
+function normalizeDraftSupersets(exercises: WorkoutExercise[]) {
+  const counts = new Map<string, number>();
+  exercises.forEach((exercise) => {
+    if (exercise.supersetId) counts.set(exercise.supersetId, (counts.get(exercise.supersetId) ?? 0) + 1);
+  });
+  return exercises.map((exercise) =>
+    exercise.supersetId && (counts.get(exercise.supersetId) ?? 0) < 2
+      ? { ...exercise, supersetId: undefined }
+      : exercise,
+  );
+}
+
 function getSetLabel(sets: WorkoutSet[], index: number) {
   const set = sets[index];
   if ((set.setType ?? 'normal') === 'warmup') return 'W';
@@ -1649,6 +1832,15 @@ function getEmptyWorkoutName() {
   return 'Evening Workout';
 }
 
+function formatSavedWorkoutTime(timestamp: number) {
+  const elapsedMinutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60000));
+  if (elapsedMinutes < 1) return 'just now';
+  if (elapsedMinutes < 60) return `${elapsedMinutes}m ago`;
+  const elapsedHours = Math.floor(elapsedMinutes / 60);
+  if (elapsedHours < 24) return `${elapsedHours}h ago`;
+  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(new Date(timestamp));
+}
+
 function confirmAction(
   title: string,
   message: string,
@@ -1672,6 +1864,16 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     paddingBottom: 150,
     gap: spacing.md,
+  },
+  search: {
+    minHeight: 48,
+    color: colors.text,
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    fontSize: 15,
   },
   workoutRow: {
     minHeight: 72,
@@ -1948,6 +2150,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     backgroundColor: colors.surfaceElevated,
   },
+  templateSupersetBadge: { alignSelf: 'flex-start', color: colors.primary, backgroundColor: colors.surfaceElevated, borderColor: colors.primary, borderWidth: 1, borderRadius: radius.pill, paddingHorizontal: 8, paddingVertical: 3, fontSize: 9, fontWeight: '900', marginBottom: 4 },
   templateExerciseHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2137,6 +2340,7 @@ const styles = StyleSheet.create({
     borderTopColor: colors.border,
     borderTopWidth: StyleSheet.hairlineWidth,
   },
+  incompleteRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.sm, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
   compactActionButton: {
     minHeight: 38,
     justifyContent: 'center',

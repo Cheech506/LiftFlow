@@ -82,9 +82,13 @@ export default function ActiveWorkoutScreen() {
     removeExercise,
     moveExercise,
     replaceExercise,
+    createSuperset,
+    removeFromSuperset,
     updateExerciseNotes,
     updateWorkoutNotes,
+    updateWorkoutName,
     restTimerSettings,
+    preferences,
     setRestTimer,
     adjustRestTimer,
     pauseRestTimer,
@@ -94,6 +98,7 @@ export default function ActiveWorkoutScreen() {
     acknowledgeRestTimerComplete,
     updateWorkoutExerciseRestSeconds,
     finishWorkout,
+    saveWorkoutForLater,
     discardWorkout,
     persistenceStatus,
   } = useActiveWorkout();
@@ -103,6 +108,7 @@ export default function ActiveWorkoutScreen() {
   const [exercisePickerOpen, setExercisePickerOpen] = useState(false);
   const [exerciseMenuId, setExerciseMenuId] = useState<string | null>(null);
   const [replaceExerciseId, setReplaceExerciseId] = useState<string | null>(null);
+  const [supersetExerciseId, setSupersetExerciseId] = useState<string | null>(null);
   const [setMenu, setSetMenu] = useState<SetMenuState>(null);
   const [restTimerOpen, setRestTimerOpen] = useState(false);
 
@@ -143,6 +149,10 @@ export default function ActiveWorkoutScreen() {
   const selectedExercise = workout?.exercises.find((exercise) => exercise.id === exerciseMenuId) ?? null;
   const selectedSetExercise = workout?.exercises.find((exercise) => exercise.id === setMenu?.exerciseId) ?? null;
   const selectedSet = selectedSetExercise?.sets.find((set) => set.id === setMenu?.setId) ?? null;
+  const supersetLabels = useMemo(() => {
+    const groups = [...new Set((workout?.exercises ?? []).map((exercise) => exercise.supersetId).filter(Boolean))];
+    return new Map(groups.map((groupId, index) => [groupId, `Superset ${String.fromCharCode(65 + index)}`]));
+  }, [workout?.exercises]);
 
   const closeWorkoutScreen = () => {
     setDialog(null);
@@ -157,6 +167,10 @@ export default function ActiveWorkoutScreen() {
   const discard = () => {
     discardWorkout();
     closeWorkoutScreen();
+  };
+
+  const saveForLater = () => {
+    if (saveWorkoutForLater()) closeWorkoutScreen();
   };
 
   if (!workout) {
@@ -218,7 +232,17 @@ export default function ActiveWorkoutScreen() {
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.workoutHeader}>
-          <Text style={styles.workoutName}>{workout.name}</Text>
+          <TextInput
+            accessibilityLabel="Workout name"
+            value={workout.name}
+            onChangeText={updateWorkoutName}
+            onBlur={() => {
+              if (!workout.name.trim()) updateWorkoutName('Workout');
+            }}
+            returnKeyType="done"
+            selectTextOnFocus
+            style={[styles.workoutName, styles.workoutNameInput]}
+          />
           <Text style={styles.elapsed}>{formatDuration(elapsed)}</Text>
           <TextInput
             accessibilityLabel="Workout notes"
@@ -245,6 +269,7 @@ export default function ActiveWorkoutScreen() {
             <ExerciseCard
               key={exercise.id}
               exercise={exercise}
+              supersetLabel={exercise.supersetId ? supersetLabels.get(exercise.supersetId) : undefined}
               progress={progressByWorkoutExerciseId.get(exercise.id) ?? null}
               onToggle={(setId) => {
                 const set = exercise.sets.find((item) => item.id === setId);
@@ -268,6 +293,7 @@ export default function ActiveWorkoutScreen() {
         {workout.exercises.length > 0 ? (
           <PrimaryButton label="+ Add Exercises" onPress={() => setExercisePickerOpen(true)} variant="secondary" />
         ) : null}
+        <PrimaryButton label="Save Workout for Later" onPress={saveForLater} variant="secondary" />
         <PrimaryButton label="Discard Workout" onPress={() => setDialog('discard')} variant="danger" />
       </ScrollView>
 
@@ -290,6 +316,16 @@ export default function ActiveWorkoutScreen() {
         onSelect={addExercise}
       />
 
+      <SupersetPickerModal
+        exercise={workout.exercises.find((exercise) => exercise.id === supersetExerciseId) ?? null}
+        exercises={workout.exercises}
+        onClose={() => setSupersetExerciseId(null)}
+        onSelect={(partnerId) => {
+          if (supersetExerciseId) createSuperset(supersetExerciseId, partnerId);
+          setSupersetExerciseId(null);
+        }}
+      />
+
       <ExercisePickerModal
         title="Replace Exercise"
         exercises={availableExercises}
@@ -304,6 +340,7 @@ export default function ActiveWorkoutScreen() {
 
       <ExerciseActionsModal
         exercise={selectedExercise}
+        canSuperset={workout.exercises.length > 1}
         canMoveUp={selectedExercise ? workout.exercises.findIndex((item) => item.id === selectedExercise.id) > 0 : false}
         canMoveDown={selectedExercise ? workout.exercises.findIndex((item) => item.id === selectedExercise.id) < workout.exercises.length - 1 : false}
         onClose={() => setExerciseMenuId(null)}
@@ -313,6 +350,14 @@ export default function ActiveWorkoutScreen() {
         }}
         onReplace={() => {
           if (selectedExercise) setReplaceExerciseId(selectedExercise.id);
+          setExerciseMenuId(null);
+        }}
+        onSuperset={() => {
+          if (selectedExercise) setSupersetExerciseId(selectedExercise.id);
+          setExerciseMenuId(null);
+        }}
+        onRemoveFromSuperset={() => {
+          if (selectedExercise) removeFromSuperset(selectedExercise.id);
           setExerciseMenuId(null);
         }}
         restSeconds={selectedExercise?.restSeconds ?? restTimerSettings.defaultSeconds}
@@ -332,6 +377,7 @@ export default function ActiveWorkoutScreen() {
       <SetActionsModal
         exercise={selectedSetExercise}
         set={selectedSet}
+        preferredEffort={preferences.preferredEffort}
         onClose={() => setSetMenu(null)}
         onSetType={(type) => {
           if (setMenu) setSetType(setMenu.exerciseId, setMenu.setId, type);
@@ -372,6 +418,7 @@ export default function ActiveWorkoutScreen() {
 
 function ExerciseCard({
   exercise,
+  supersetLabel,
   progress,
   onToggle,
   onUpdateValue,
@@ -382,6 +429,7 @@ function ExerciseCard({
   onUpdateNotes,
 }: {
   exercise: WorkoutExercise;
+  supersetLabel?: string;
   progress: ExerciseProgressSummary | null;
   onToggle: (setId: string) => void;
   onUpdateValue: (setId: string, field: WorkoutMetricField, value: number | undefined) => void;
@@ -397,6 +445,7 @@ function ExerciseCard({
     <View style={styles.exerciseCard}>
       <View style={styles.exerciseHeader}>
         <View style={styles.exerciseHeaderCopy}>
+          {supersetLabel ? <Text style={styles.supersetBadge}>{supersetLabel}</Text> : null}
           <Text style={styles.exerciseName}>{exercise.name}</Text>
           <Text style={styles.exerciseTracking}>{exercise.exerciseType}</Text>
           <Text style={styles.exerciseNote}>Tap a set label for type, effort, move, and delete controls.</Text>
@@ -547,6 +596,31 @@ function ExercisePickerModal({ title, exercises, visible, disabledNames, onClose
   );
 }
 
+function SupersetPickerModal({ exercise, exercises, onClose, onSelect }: { exercise: WorkoutExercise | null; exercises: WorkoutExercise[]; onClose: () => void; onSelect: (exerciseId: string) => void }) {
+  return (
+    <Modal transparent visible={Boolean(exercise)} animationType="fade" onRequestClose={onClose}>
+      <View style={styles.modalBackdrop}>
+        <View style={styles.modalCardLarge}>
+          <Text style={styles.modalTitle}>Build a Superset</Text>
+          <Text style={styles.modalBody}>Choose an exercise to group with {exercise?.name}. Existing groups will merge automatically.</Text>
+          <ScrollView style={styles.exercisePickerList}>
+            {exercises.filter((item) => item.id !== exercise?.id).map((item) => (
+              <Pressable key={item.id} onPress={() => onSelect(item.id)} style={({ pressed }) => [styles.pickerRow, pressed && styles.pressed]}>
+                <View style={styles.pickerCopy}>
+                  <Text style={styles.pickerName}>{item.name}</Text>
+                  <Text style={styles.pickerDetail}>{item.supersetId ? 'Already grouped · supersets will merge' : item.exerciseType}</Text>
+                </View>
+                <Text style={styles.addLabel}>Select</Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+          <PrimaryButton label="Cancel" onPress={onClose} variant="secondary" />
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 
 function RestTimerModal({ visible, seconds, durationSeconds, running, paused, complete, sourceExerciseName, onClose, onStart, onAdjust, onPause, onResume, onRestart, onSkip }: { visible: boolean; seconds: number; durationSeconds: number; running: boolean; paused: boolean; complete: boolean; sourceExerciseName?: string; onClose: () => void; onStart: () => void; onAdjust: (seconds: number) => void; onPause: () => void; onResume: () => void; onRestart: () => void; onSkip: () => void }) {
   return (
@@ -577,7 +651,7 @@ function RestTimerModal({ visible, seconds, durationSeconds, running, paused, co
   );
 }
 
-function ExerciseActionsModal({ exercise, canMoveUp, canMoveDown, restSeconds, onClose, onMove, onReplace, onRestSecondsChange, onRemove }: { exercise: WorkoutExercise | null; canMoveUp: boolean; canMoveDown: boolean; restSeconds: number; onClose: () => void; onMove: (direction: 'up' | 'down') => void; onReplace: () => void; onRestSecondsChange: (seconds: number) => void; onRemove: () => void }) {
+function ExerciseActionsModal({ exercise, canMoveUp, canMoveDown, canSuperset, restSeconds, onClose, onMove, onReplace, onSuperset, onRemoveFromSuperset, onRestSecondsChange, onRemove }: { exercise: WorkoutExercise | null; canMoveUp: boolean; canMoveDown: boolean; canSuperset: boolean; restSeconds: number; onClose: () => void; onMove: (direction: 'up' | 'down') => void; onReplace: () => void; onSuperset: () => void; onRemoveFromSuperset: () => void; onRestSecondsChange: (seconds: number) => void; onRemove: () => void }) {
   return (
     <Modal transparent visible={Boolean(exercise)} animationType="fade" onRequestClose={onClose}>
       <View style={styles.modalBackdrop}>
@@ -596,6 +670,8 @@ function ExerciseActionsModal({ exercise, canMoveUp, canMoveDown, restSeconds, o
                 <SmallAction label="Move Down" disabled={!canMoveDown} onPress={() => onMove('down')} />
               </View>
               <PrimaryButton label="Replace Exercise" onPress={onReplace} variant="secondary" />
+              {canSuperset ? <PrimaryButton label={exercise.supersetId ? 'Add Another Superset Exercise' : 'Create Superset'} onPress={onSuperset} variant="secondary" /> : null}
+              {exercise.supersetId ? <PrimaryButton label="Remove from Superset" onPress={onRemoveFromSuperset} variant="secondary" /> : null}
               <PrimaryButton label="Remove Exercise" onPress={onRemove} variant="danger" />
               <PrimaryButton label="Cancel" onPress={onClose} variant="secondary" />
             </>
@@ -606,14 +682,16 @@ function ExerciseActionsModal({ exercise, canMoveUp, canMoveDown, restSeconds, o
   );
 }
 
-function SetActionsModal({ exercise, set, onClose, onSetType, onEffort, onMove, onDelete }: { exercise: WorkoutExercise | null; set: WorkoutSet | null; onClose: () => void; onSetType: (type: WorkoutSetType) => void; onEffort: (mode: EffortMode | null, value?: number) => void; onMove: (direction: 'up' | 'down') => void; onDelete: () => void }) {
+function SetActionsModal({ exercise, set, preferredEffort, onClose, onSetType, onEffort, onMove, onDelete }: { exercise: WorkoutExercise | null; set: WorkoutSet | null; preferredEffort: EffortMode | 'none'; onClose: () => void; onSetType: (type: WorkoutSetType) => void; onEffort: (mode: EffortMode | null, value?: number) => void; onMove: (direction: 'up' | 'down') => void; onDelete: () => void }) {
   const [effortMode, setEffortMode] = useState<EffortMode | null>(null);
   const [effortText, setEffortText] = useState('');
   useEffect(() => {
     if (set?.rpe !== undefined) { setEffortMode('rpe'); setEffortText(String(set.rpe)); }
     else if (set?.rir !== undefined) { setEffortMode('rir'); setEffortText(String(set.rir)); }
+    else if (preferredEffort === 'rpe') { setEffortMode('rpe'); setEffortText('8'); }
+    else if (preferredEffort === 'rir') { setEffortMode('rir'); setEffortText('2'); }
     else { setEffortMode(null); setEffortText(''); }
-  }, [set]);
+  }, [preferredEffort, set]);
   const commitEffort = () => {
     if (!effortMode || !effortText.trim()) { onEffort(null); return; }
     const value = Number.parseFloat(effortText.replace(',', '.'));
@@ -789,6 +867,7 @@ const styles = StyleSheet.create({
   content: { padding: spacing.md, paddingBottom: spacing.xl, gap: spacing.md },
   workoutHeader: { gap: 4 },
   workoutName: { color: colors.text, fontSize: 30, fontWeight: '900' },
+  workoutNameInput: { paddingVertical: 0, paddingHorizontal: 0 },
   elapsed: { color: colors.text, fontSize: 17, fontWeight: '700' },
   muted: { color: colors.textMuted, fontSize: 14, lineHeight: 20 },
   workoutNotes: { minHeight: 48, maxHeight: 110, color: colors.text, backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1, borderRadius: radius.md, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, fontSize: 14, marginTop: spacing.sm },
@@ -800,6 +879,7 @@ const styles = StyleSheet.create({
   exerciseCard: { backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1, borderRadius: radius.lg, padding: spacing.md },
   exerciseHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: spacing.sm },
   exerciseHeaderCopy: { flex: 1, paddingRight: spacing.sm },
+  supersetBadge: { alignSelf: 'flex-start', color: colors.primary, backgroundColor: colors.surfaceElevated, borderColor: colors.primary, borderWidth: 1, borderRadius: radius.pill, paddingHorizontal: 9, paddingVertical: 3, fontSize: 10, fontWeight: '900', marginBottom: 5 },
   exerciseName: { color: colors.text, fontSize: 20, fontWeight: '900' },
   exerciseTracking: { color: colors.primary, fontSize: 12, fontWeight: '800', marginTop: 2 },
   exerciseNote: { color: colors.textMuted, fontSize: 12, marginTop: 4 },

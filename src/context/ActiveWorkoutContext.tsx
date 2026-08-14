@@ -8,7 +8,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, AppState, StyleSheet, Text, View } from 'react-native';
 
 import { exerciseLibrary, ExerciseDefinition, ExerciseType } from '@/constants/exercises';
 import { colors, spacing } from '@/constants/theme';
@@ -29,7 +29,9 @@ import {
   scheduleRestTimerAlert,
   signalRestTimerComplete,
 } from '@/lib/restTimerAlerts';
-import { loadLiftFlowState, saveLiftFlowState } from '@/storage/liftflowStorage';
+import { applyPreviousPerformance } from '@/lib/previousPerformance';
+import { createUuid } from '@/lib/ids';
+import { loadLiftFlowState, saveLiftFlowSafetyBackup, saveLiftFlowState } from '@/storage/liftflowStorage';
 
 export type WorkoutSetType = 'normal' | 'warmup' | 'drop' | 'failure' | 'amrap';
 export type EffortMode = 'rpe' | 'rir';
@@ -57,12 +59,14 @@ export type WorkoutExercise = {
   exerciseType: ExerciseType;
   restSeconds?: number;
   notes?: string;
+  supersetId?: string;
   sets: WorkoutSet[];
 };
 
 export type WorkoutFolder = {
   id: string;
   name: string;
+  archived?: boolean;
 };
 
 export type WorkoutTemplate = {
@@ -89,6 +93,10 @@ export type ActiveWorkout = {
   exercises: WorkoutExercise[];
 };
 
+export type IncompleteWorkout = ActiveWorkout & {
+  savedAt: number;
+};
+
 export type RestTimerSettings = {
   defaultSeconds: number;
   autoStart: boolean;
@@ -105,6 +113,22 @@ export type CompletedWorkout = {
   sourceFolder?: string;
   notes?: string;
   exercises: WorkoutExercise[];
+  importSource?: 'strong';
+  importBatchId?: string;
+  importFingerprint?: string;
+  importedAt?: number;
+  durationUnknown?: boolean;
+};
+
+export type DeletedWorkout = CompletedWorkout & {
+  deletedAt: number;
+};
+
+export type AppPreferences = {
+  weeklyWorkoutGoal: number;
+  weightUnit: 'lb' | 'kg';
+  distanceUnit: 'mi' | 'km';
+  preferredEffort: EffortMode | 'none';
 };
 
 export type LiftFlowStateSnapshot = {
@@ -112,8 +136,11 @@ export type LiftFlowStateSnapshot = {
   folders: WorkoutFolder[];
   templates: WorkoutTemplate[];
   activeWorkout: ActiveWorkout | null;
+  incompleteWorkouts: IncompleteWorkout[];
   completedWorkouts: CompletedWorkout[];
+  deletedWorkouts: DeletedWorkout[];
   restTimerSettings: RestTimerSettings;
+  preferences: AppPreferences;
 };
 
 type SetValueField = WorkoutMetricField;
@@ -131,6 +158,7 @@ export type CreateExerciseInput = {
   defaultDurationSeconds?: number;
   defaultDistance?: number;
   defaultRestSeconds?: number;
+  instructions?: string;
 };
 
 export type UpdateExerciseInput = CreateExerciseInput & { id: string };
@@ -155,26 +183,39 @@ export type UpdateTemplateInput = {
   exercises: WorkoutExercise[];
 };
 
+export type CreateManualWorkoutInput = {
+  name: string;
+  startedAt: number;
+  completedAt: number;
+  notes?: string;
+  exercises: WorkoutExercise[];
+};
+
 type ActiveWorkoutContextValue = {
   workout: ActiveWorkout | null;
   exercises: ExerciseDefinition[];
   folders: WorkoutFolder[];
   templates: WorkoutTemplate[];
+  incompleteWorkouts: IncompleteWorkout[];
   completedWorkouts: CompletedWorkout[];
+  deletedWorkouts: DeletedWorkout[];
   completedSetCount: number;
   totalSetCount: number;
   persistenceStatus: PersistenceStatus;
   lastSavedAt: number | null;
   restTimerSettings: RestTimerSettings;
+  preferences: AppPreferences;
   createExercise: (input: CreateExerciseInput) => ExerciseDefinition;
   updateExercise: (input: UpdateExerciseInput) => ExerciseDefinition | null;
   setExerciseArchived: (exerciseId: string, archived: boolean) => void;
+  toggleExerciseFavorite: (exerciseId: string) => void;
   deleteExercise: (exerciseId: string) => boolean;
   getExerciseUsage: (exerciseId: string) => ExerciseUsage;
   createFolder: (name: string) => WorkoutFolder | null;
   renameFolder: (folderId: string, name: string) => boolean;
   deleteFolder: (folderId: string) => boolean;
   moveFolder: (folderId: string, direction: MoveDirection) => void;
+  setFolderArchived: (folderId: string, archived: boolean) => void;
   createTemplate: (input: CreateTemplateInput) => WorkoutTemplate;
   updateTemplate: (input: UpdateTemplateInput) => WorkoutTemplate | null;
   duplicateTemplate: (templateId: string) => WorkoutTemplate | null;
@@ -196,10 +237,14 @@ type ActiveWorkoutContextValue = {
   removeExercise: (exerciseId: string) => void;
   moveExercise: (exerciseId: string, direction: MoveDirection) => void;
   replaceExercise: (workoutExerciseId: string, exerciseDefinitionId: string) => void;
+  createSuperset: (exerciseId: string, partnerExerciseId: string) => boolean;
+  removeFromSuperset: (exerciseId: string) => void;
   updateExerciseNotes: (exerciseId: string, notes: string) => void;
   updateWorkoutNotes: (notes: string) => void;
+  updateWorkoutName: (name: string) => void;
   updateWorkoutExerciseRestSeconds: (exerciseId: string, seconds: number) => void;
   updateRestTimerSettings: (settings: Partial<RestTimerSettings>) => void;
+  updatePreferences: (preferences: Partial<AppPreferences>) => void;
   setRestTimer: (seconds: number, sourceExerciseId?: string) => void;
   adjustRestTimer: (deltaSeconds: number) => void;
   pauseRestTimer: () => void;
@@ -208,9 +253,15 @@ type ActiveWorkoutContextValue = {
   clearRestTimer: () => void;
   acknowledgeRestTimerComplete: () => void;
   finishWorkout: (options?: FinishWorkoutOptions) => void;
+  saveWorkoutForLater: () => boolean;
+  resumeIncompleteWorkout: (workoutId: string) => boolean;
+  deleteIncompleteWorkout: (workoutId: string) => boolean;
   discardWorkout: () => void;
+  createManualWorkout: (input: CreateManualWorkoutInput) => CompletedWorkout | null;
   updateCompletedWorkout: (workout: CompletedWorkout) => void;
   deleteCompletedWorkout: (workoutId: string) => boolean;
+  restoreDeletedWorkout: (workoutId: string) => boolean;
+  permanentlyDeleteWorkout: (workoutId: string) => boolean;
   repeatCompletedWorkout: (workoutId: string) => boolean;
   saveCompletedWorkoutAsTemplate: (workoutId: string) => WorkoutTemplate | null;
   getStateSnapshot: () => LiftFlowStateSnapshot;
@@ -382,6 +433,13 @@ const DEFAULT_REST_TIMER_SETTINGS: RestTimerSettings = {
   notificationsEnabled: false,
 };
 
+const DEFAULT_PREFERENCES: AppPreferences = {
+  weeklyWorkoutGoal: 3,
+  weightUnit: 'lb',
+  distanceUnit: 'mi',
+  preferredEffort: 'rpe',
+};
+
 const initialFolders: WorkoutFolder[] = [
   { id: 'upper-lower', name: 'Upper / Lower' },
   { id: 'push-pull-legs', name: 'Push Pull Legs' },
@@ -394,13 +452,20 @@ const cloneExercises = (exercises: WorkoutExercise[]): WorkoutExercise[] =>
   }));
 
 const cloneTemplateExercises = (template: WorkoutTemplate): WorkoutExercise[] => {
-  const workoutStamp = Date.now();
+  const supersetIds = new Map<string, string>();
   return template.exercises.map((exercise, exerciseIndex) => ({
     ...exercise,
     exerciseType: normalizeExerciseType(exercise.exerciseType),
-    id: `${exercise.id}-${workoutStamp}-${exerciseIndex}`,
+    id: createUuid(),
+    supersetId: exercise.supersetId
+      ? supersetIds.get(exercise.supersetId) ?? (() => {
+          const id = createUuid();
+          supersetIds.set(exercise.supersetId as string, id);
+          return id;
+        })()
+      : undefined,
     sets: exercise.sets.map((set, index) => ({
-      id: `${exercise.id}-${workoutStamp}-${index}`,
+      id: createUuid(),
       ...copyMetricValues(set),
       rpe: set.rpe,
       rir: set.rir,
@@ -429,12 +494,9 @@ function createWorkoutSetFromDefinition(definition: ExerciseDefinition, id: stri
   };
 }
 
-function toId(value: string) {
-  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-}
-
 function canonicalFolderName(folders: WorkoutFolder[], requested: string) {
-  const trimmed = requested.trim() || 'My Workouts';
+  const trimmed = requested.trim();
+  if (!trimmed) return '';
   return folders.find((folder) => folder.name.toLowerCase() === trimmed.toLowerCase())?.name ?? trimmed;
 }
 
@@ -451,19 +513,40 @@ function moveItem<T>(items: T[], index: number, direction: MoveDirection) {
   return copy;
 }
 
+function normalizeSupersetMembers(exercises: WorkoutExercise[]): WorkoutExercise[] {
+  const memberCounts = new Map<string, number>();
+  exercises.forEach((exercise) => {
+    if (exercise.supersetId) {
+      memberCounts.set(exercise.supersetId, (memberCounts.get(exercise.supersetId) ?? 0) + 1);
+    }
+  });
+  return exercises.map((exercise) =>
+    exercise.supersetId && (memberCounts.get(exercise.supersetId) ?? 0) < 2
+      ? { ...exercise, supersetId: undefined }
+      : exercise,
+  );
+}
+
 export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
   const [workout, setWorkout] = useState<ActiveWorkout | null>(null);
   const [exercises, setExercises] = useState<ExerciseDefinition[]>(exerciseLibrary);
-  const [folders, setFolders] = useState<WorkoutFolder[]>(initialFolders);
-  const [templates, setTemplates] = useState<WorkoutTemplate[]>(initialTemplates);
+  // New installs start without demo routines. Existing users hydrate their saved
+  // folders and templates from SQLite, so upgrading never removes real data.
+  const [folders, setFolders] = useState<WorkoutFolder[]>([]);
+  const [templates, setTemplates] = useState<WorkoutTemplate[]>([]);
+  const [incompleteWorkouts, setIncompleteWorkouts] = useState<IncompleteWorkout[]>([]);
   const [completedWorkouts, setCompletedWorkouts] = useState<CompletedWorkout[]>([]);
+  const [deletedWorkouts, setDeletedWorkouts] = useState<DeletedWorkout[]>([]);
   const [restTimerSettings, setRestTimerSettings] = useState<RestTimerSettings>(DEFAULT_REST_TIMER_SETTINGS);
+  const [preferences, setPreferences] = useState<AppPreferences>(DEFAULT_PREFERENCES);
   const [isHydrated, setIsHydrated] = useState(false);
   const [persistenceStatus, setPersistenceStatus] = useState<PersistenceStatus>('loading');
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const skipNextAutomaticSaveRef = useRef(false);
   const restNotificationIdRef = useRef<string | undefined>(undefined);
   const restTimerGenerationRef = useRef(0);
+  const latestSnapshotRef = useRef<LiftFlowStateSnapshot | null>(null);
 
   useEffect(() => {
     void configureRestTimerAlerts();
@@ -480,8 +563,11 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
           setFolders(savedState.folders);
           setTemplates(savedState.templates);
           setWorkout(savedState.activeWorkout);
+          setIncompleteWorkouts(savedState.incompleteWorkouts);
           setCompletedWorkouts(savedState.completedWorkouts);
+          setDeletedWorkouts(savedState.deletedWorkouts);
           setRestTimerSettings(savedState.restTimerSettings);
+          setPreferences(savedState.preferences);
           restNotificationIdRef.current = savedState.activeWorkout?.restTimerNotificationId;
         }
         setPersistenceStatus('saved');
@@ -524,9 +610,14 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
   useEffect(() => {
     if (!isHydrated) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    if (skipNextAutomaticSaveRef.current) {
+      skipNextAutomaticSaveRef.current = false;
+      setPersistenceStatus('saved');
+      return;
+    }
     setPersistenceStatus('saving');
     saveTimerRef.current = setTimeout(() => {
-      void saveLiftFlowState({ exercises, folders, templates, activeWorkout: workout, completedWorkouts, restTimerSettings })
+      void saveLiftFlowState({ exercises, folders, templates, activeWorkout: workout, incompleteWorkouts, completedWorkouts, deletedWorkouts, restTimerSettings, preferences })
         .then(() => { setPersistenceStatus('saved'); setLastSavedAt(Date.now()); })
         .catch((error: unknown) => {
           console.error('Unable to save LiftFlow local data.', error);
@@ -534,14 +625,42 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
         });
     }, 150);
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
-  }, [completedWorkouts, exercises, folders, isHydrated, restTimerSettings, templates, workout]);
+  }, [completedWorkouts, deletedWorkouts, exercises, folders, incompleteWorkouts, isHydrated, preferences, restTimerSettings, templates, workout]);
+
+  useEffect(() => {
+    latestSnapshotRef.current = {
+      exercises,
+      folders,
+      templates,
+      activeWorkout: workout,
+      incompleteWorkouts,
+      completedWorkouts,
+      deletedWorkouts,
+      restTimerSettings,
+      preferences,
+    };
+  }, [completedWorkouts, deletedWorkouts, exercises, folders, incompleteWorkouts, preferences, restTimerSettings, templates, workout]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active' || !isHydrated || !latestSnapshotRef.current) return;
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      setPersistenceStatus('saving');
+      void saveLiftFlowState(latestSnapshotRef.current)
+        .then(() => { setPersistenceStatus('saved'); setLastSavedAt(Date.now()); })
+        .catch((error: unknown) => {
+          console.error('Unable to checkpoint LiftFlow before backgrounding.', error);
+          setPersistenceStatus('error');
+        });
+    });
+    return () => subscription.remove();
+  }, [isHydrated]);
 
   const createExercise = useCallback((input: CreateExerciseInput) => {
     const trimmedName = input.name.trim();
-    const idBase = toId(trimmedName) || 'exercise';
     const exerciseType = normalizeExerciseType(input.exerciseType);
     const exercise: ExerciseDefinition = {
-      id: `${idBase}-${Date.now()}`,
+      id: createUuid(),
       name: trimmedName,
       detail: `${input.primaryMuscle.trim()} · ${input.equipment.trim()}`,
       primaryMuscle: input.primaryMuscle.trim(),
@@ -556,6 +675,7 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
         ? input.defaultDistance
         : undefined,
       defaultRestSeconds: input.defaultRestSeconds ?? restTimerSettings.defaultSeconds,
+      instructions: input.instructions?.trim() || undefined,
       isCustom: true,
     };
     setExercises((current) => [...current, exercise]);
@@ -588,6 +708,7 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
         ? input.defaultDistance
         : undefined,
       defaultRestSeconds: input.defaultRestSeconds ?? existing.defaultRestSeconds ?? restTimerSettings.defaultSeconds,
+      instructions: input.instructions?.trim() || undefined,
       previousNames,
     };
     setExercises((current) => current.map((exercise) => exercise.id === input.id ? updated : exercise));
@@ -633,6 +754,12 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
     setExercises((current) => current.map((exercise) => exercise.id === exerciseId && exercise.isCustom ? { ...exercise, archived } : exercise));
   }, []);
 
+  const toggleExerciseFavorite = useCallback((exerciseId: string) => {
+    setExercises((current) => current.map((exercise) =>
+      exercise.id === exerciseId ? { ...exercise, favorite: !exercise.favorite } : exercise,
+    ));
+  }, []);
+
   const deleteExercise = useCallback((exerciseId: string) => {
     const definition = exercises.find((exercise) => exercise.id === exerciseId);
     if (!definition?.isCustom || !definition.archived) return false;
@@ -646,7 +773,7 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
     const trimmed = name.trim();
     if (!trimmed) return null;
     if (folders.some((folder) => folder.name.toLowerCase() === trimmed.toLowerCase())) return null;
-    const folder: WorkoutFolder = { id: `${toId(trimmed) || 'folder'}-${Date.now()}`, name: trimmed };
+    const folder: WorkoutFolder = { id: createUuid(), name: trimmed };
     setFolders((current) => [...current, folder]);
     return folder;
   }, [folders]);
@@ -670,26 +797,41 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
 
   const moveFolder = useCallback((folderId: string, direction: MoveDirection) => {
     setFolders((current) => {
-      const index = current.findIndex((folder) => folder.id === folderId);
-      return moveItem(current, index, direction);
+      const source = current.find((folder) => folder.id === folderId);
+      if (!source) return current;
+      const peers = current.filter((folder) => Boolean(folder.archived) === Boolean(source.archived));
+      const peerIndex = peers.findIndex((folder) => folder.id === folderId);
+      const targetPeerIndex = direction === 'up' ? peerIndex - 1 : peerIndex + 1;
+      if (targetPeerIndex < 0 || targetPeerIndex >= peers.length) return current;
+      const sourceIndex = current.findIndex((folder) => folder.id === folderId);
+      const targetIndex = current.findIndex((folder) => folder.id === peers[targetPeerIndex].id);
+      const next = [...current];
+      [next[sourceIndex], next[targetIndex]] = [next[targetIndex], next[sourceIndex]];
+      return next;
     });
   }, []);
 
+  const setFolderArchived = useCallback((folderId: string, archived: boolean) => {
+    setFolders((current) => current.map((folder) =>
+      folder.id === folderId ? { ...folder, archived } : folder,
+    ));
+  }, []);
+
   const createTemplate = useCallback((input: CreateTemplateInput) => {
-    const templateId = `${toId(input.name) || 'template'}-${Date.now()}`;
+    const templateId = createUuid();
     const selected = input.exerciseIds
       .map((id) => exercises.find((item) => item.id === id))
       .filter((item): item is ExerciseDefinition => Boolean(item && !item.archived));
     const safeSetCount = Math.min(10, Math.max(1, Math.round(input.setCount)));
     const templateExercises = selected.map((definition) => ({
-      id: `${templateId}-${definition.id}`,
+      id: createUuid(),
       exerciseDefinitionId: definition.id,
       name: definition.name,
       exerciseType: normalizeExerciseType(definition.exerciseType),
       restSeconds: definition.defaultRestSeconds ?? restTimerSettings.defaultSeconds,
       notes: '',
       sets: Array.from({ length: safeSetCount }, (_, index) =>
-        createSetFromDefinition(definition, `${templateId}-${definition.id}-${index + 1}`),
+        createSetFromDefinition(definition, createUuid()),
       ),
     }));
     const template: WorkoutTemplate = {
@@ -699,9 +841,14 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
       detail: getTemplateDetail(templateExercises),
       exercises: templateExercises,
     };
-    setFolders((current) => current.some((folder) => folder.name.toLowerCase() === template.folder.toLowerCase())
-      ? current
-      : [...current, { id: `${toId(template.folder) || 'folder'}-${Date.now()}`, name: template.folder }]);
+    setFolders((current) => {
+      if (!template.folder) return current;
+      const existing = current.find((folder) => folder.name.toLowerCase() === template.folder.toLowerCase());
+      if (!existing) return [...current, { id: createUuid(), name: template.folder }];
+      return existing.archived
+        ? current.map((folder) => folder.id === existing.id ? { ...folder, archived: false } : folder)
+        : current;
+    });
     setTemplates((current) => [...current, template]);
     return template;
   }, [exercises, folders, restTimerSettings.defaultSeconds]);
@@ -709,7 +856,7 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
   const updateTemplate = useCallback((input: UpdateTemplateInput) => {
     const name = input.name.trim();
     if (!name || input.exercises.length === 0) return null;
-    const normalized = input.exercises.map((exercise, exerciseIndex) => {
+    const normalized = normalizeSupersetMembers(input.exercises.map((exercise, exerciseIndex) => {
       const exerciseType = normalizeExerciseType(exercise.exerciseType);
       return {
         ...exercise,
@@ -722,11 +869,16 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
           setType: set.setType ?? 'normal',
         })),
       };
-    });
+    }));
     const updated: WorkoutTemplate = { id: input.id, name, folder: canonicalFolderName(folders, input.folder), detail: getTemplateDetail(normalized), exercises: normalized };
-    setFolders((current) => current.some((folder) => folder.name.toLowerCase() === updated.folder.toLowerCase())
-      ? current
-      : [...current, { id: `${toId(updated.folder) || 'folder'}-${Date.now()}`, name: updated.folder }]);
+    setFolders((current) => {
+      if (!updated.folder) return current;
+      const existing = current.find((folder) => folder.name.toLowerCase() === updated.folder.toLowerCase());
+      if (!existing) return [...current, { id: createUuid(), name: updated.folder }];
+      return existing.archived
+        ? current.map((folder) => folder.id === existing.id ? { ...folder, archived: false } : folder)
+        : current;
+    });
     setTemplates((current) => current.map((template) => template.id === input.id ? { ...updated, archived: template.archived } : template));
     return updated;
   }, [folders]);
@@ -734,18 +886,17 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
   const duplicateTemplate = useCallback((templateId: string) => {
     const source = templates.find((template) => template.id === templateId);
     if (!source) return null;
-    const stamp = Date.now();
     const duplicate: WorkoutTemplate = {
       ...source,
-      id: `${toId(source.name) || 'template'}-copy-${stamp}`,
+      id: createUuid(),
       name: `${source.name} Copy`,
       archived: false,
       exercises: source.exercises.map((exercise, exerciseIndex) => ({
         ...exercise,
-        id: `${exercise.id}-copy-${stamp}-${exerciseIndex}`,
+        id: createUuid(),
         sets: exercise.sets.map((set, setIndex) => ({
           ...set,
-          id: `${set.id}-copy-${stamp}-${setIndex}`,
+          id: createUuid(),
           completed: false,
         })),
       })),
@@ -778,11 +929,16 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
 
   const moveTemplateToFolder = useCallback((templateId: string, folderName: string) => {
     const trimmed = folderName.trim();
-    if (!trimmed || !templates.some((template) => template.id === templateId)) return false;
+    if (!templates.some((template) => template.id === templateId)) return false;
     const targetName = canonicalFolderName(folders, trimmed);
-    setFolders((current) => current.some((folder) => folder.name.toLowerCase() === targetName.toLowerCase())
-      ? current
-      : [...current, { id: `${toId(targetName) || 'folder'}-${Date.now()}`, name: targetName }]);
+    setFolders((current) => {
+      if (!targetName) return current;
+      const existing = current.find((folder) => folder.name.toLowerCase() === targetName.toLowerCase());
+      if (!existing) return [...current, { id: createUuid(), name: targetName }];
+      return existing.archived
+        ? current.map((folder) => folder.id === existing.id ? { ...folder, archived: false } : folder)
+        : current;
+    });
     setTemplates((current) => current.map((template) => template.id === templateId ? { ...template, folder: targetName } : template));
     return true;
   }, [folders, templates]);
@@ -800,9 +956,13 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
   const startWorkout = useCallback((name: string, templateId?: string) => {
     if (workout) return false;
     const template = templateId ? templates.find((candidate) => candidate.id === templateId) : undefined;
-    setWorkout({ id: `workout-${Date.now()}`, name, startedAt: Date.now(), sourceTemplateId: template?.id, notes: '', exercises: template ? cloneTemplateExercises(template) : [] });
+    const stamp = Date.now();
+    const workoutExercises = template
+      ? applyPreviousPerformance(cloneTemplateExercises(template), completedWorkouts)
+      : [];
+    setWorkout({ id: createUuid(), name, startedAt: stamp, sourceTemplateId: template?.id, notes: '', exercises: workoutExercises });
     return true;
-  }, [templates, workout]);
+  }, [completedWorkouts, templates, workout]);
 
   const updateWorkoutExercise = useCallback((exerciseId: string, updater: (exercise: WorkoutExercise) => WorkoutExercise) => {
     setWorkout((current) => current ? { ...current, exercises: current.exercises.map((exercise) => exercise.id === exerciseId ? updater(exercise) : exercise) } : current);
@@ -818,7 +978,16 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
     const safe = value === undefined ? undefined : Math.max(0, Math.min(mode === 'rpe' ? 10 : 10, value));
     return mode === 'rpe' ? { ...set, rpe: safe, rir: undefined } : { ...set, rir: safe, rpe: undefined };
   }) })), [updateWorkoutExercise]);
-  const copyPreviousSet = useCallback((exerciseId: string, setId: string) => updateWorkoutExercise(exerciseId, (exercise) => ({ ...exercise, sets: exercise.sets.map((set) => set.id === setId ? { ...set, weight: set.previousWeight, reps: set.previousReps, durationSeconds: set.previousDurationSeconds, distance: set.previousDistance } : set) })), [updateWorkoutExercise]);
+  const copyPreviousSet = useCallback((exerciseId: string, setId: string) => updateWorkoutExercise(exerciseId, (exercise) => ({
+    ...exercise,
+    sets: exercise.sets.map((set) => set.id === setId ? {
+      ...set,
+      weight: set.previousWeight ?? set.weight,
+      reps: set.previousReps ?? set.reps,
+      durationSeconds: set.previousDurationSeconds ?? set.durationSeconds,
+      distance: set.previousDistance ?? set.distance,
+    } : set),
+  })), [updateWorkoutExercise]);
 
   const addSet = useCallback((exerciseId: string) => updateWorkoutExercise(exerciseId, (exercise) => {
     const last = exercise.sets.at(-1);
@@ -831,7 +1000,7 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
         ...exercise.sets,
         clearIrrelevantMetrics<WorkoutSet>(
           {
-            id: `${exercise.id}-${Date.now()}`,
+            id: createUuid(),
             ...metrics,
             setType: 'normal',
             completed: false,
@@ -850,55 +1019,95 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
     if (!definition || definition.archived) return;
     setWorkout((current) => {
       if (!current || current.exercises.some((exercise) => exercise.name === definition.name)) return current;
-      const stamp = Date.now();
+      const addedExercise: WorkoutExercise = {
+        id: createUuid(),
+        exerciseDefinitionId: definition.id,
+        name: definition.name,
+        exerciseType: normalizeExerciseType(definition.exerciseType),
+        restSeconds: definition.defaultRestSeconds ?? restTimerSettings.defaultSeconds,
+        notes: '',
+        sets: Array.from({ length: 3 }, (_, index) =>
+          createWorkoutSetFromDefinition(definition, createUuid()),
+        ),
+      };
       return {
         ...current,
         exercises: [
           ...current.exercises,
-          {
-            id: `${definition.id}-${stamp}`,
-            exerciseDefinitionId: definition.id,
-            name: definition.name,
-            exerciseType: normalizeExerciseType(definition.exerciseType),
-            restSeconds: definition.defaultRestSeconds ?? restTimerSettings.defaultSeconds,
-            notes: '',
-            sets: Array.from({ length: 3 }, (_, index) =>
-              createWorkoutSetFromDefinition(
-                definition,
-                `${definition.id}-${stamp}-${index + 1}`,
-              ),
-            ),
-          },
+          applyPreviousPerformance([addedExercise], completedWorkouts)[0],
         ],
       };
     });
-  }, [exercises, restTimerSettings.defaultSeconds]);
+  }, [completedWorkouts, exercises, restTimerSettings.defaultSeconds]);
 
-  const removeExercise = useCallback((exerciseId: string) => setWorkout((current) => current ? { ...current, exercises: current.exercises.filter((exercise) => exercise.id !== exerciseId) } : current), []);
+  const removeExercise = useCallback((exerciseId: string) => setWorkout((current) => current ? {
+    ...current,
+    exercises: normalizeSupersetMembers(current.exercises.filter((exercise) => exercise.id !== exerciseId)),
+  } : current), []);
   const moveExercise = useCallback((exerciseId: string, direction: MoveDirection) => setWorkout((current) => current ? { ...current, exercises: moveItem(current.exercises, current.exercises.findIndex((exercise) => exercise.id === exerciseId), direction) } : current), []);
   const updateExerciseNotes = useCallback((exerciseId: string, notes: string) => updateWorkoutExercise(exerciseId, (exercise) => ({ ...exercise, notes })), [updateWorkoutExercise]);
+
+  const createSuperset = useCallback((exerciseId: string, partnerExerciseId: string) => {
+    if (!workout || exerciseId === partnerExerciseId) return false;
+    const first = workout.exercises.find((exercise) => exercise.id === exerciseId);
+    const second = workout.exercises.find((exercise) => exercise.id === partnerExerciseId);
+    if (!first || !second) return false;
+    setWorkout((current) => {
+      if (!current) return current;
+      const targetGroup = first.supersetId ?? second.supersetId ?? createUuid();
+      const mergedGroups = new Set([first.supersetId, second.supersetId].filter(Boolean));
+      return {
+        ...current,
+        exercises: current.exercises.map((exercise) =>
+          exercise.id === exerciseId || exercise.id === partnerExerciseId ||
+          (exercise.supersetId && mergedGroups.has(exercise.supersetId))
+            ? { ...exercise, supersetId: targetGroup }
+            : exercise,
+        ),
+      };
+    });
+    return true;
+  }, [workout]);
+
+  const removeFromSuperset = useCallback((exerciseId: string) => {
+    setWorkout((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        exercises: normalizeSupersetMembers(current.exercises.map((exercise) =>
+          exercise.id === exerciseId ? { ...exercise, supersetId: undefined } : exercise,
+        )),
+      };
+    });
+  }, []);
 
   const replaceExercise = useCallback((workoutExerciseId: string, definitionId: string) => {
     const definition = exercises.find((item) => item.id === definitionId && !item.archived);
     if (!definition) return;
-    const stamp = Date.now();
-    updateWorkoutExercise(workoutExerciseId, (exercise) => ({
-      ...exercise,
-      id: `${definition.id}-${stamp}`,
-      exerciseDefinitionId: definition.id,
-      name: definition.name,
-      exerciseType: normalizeExerciseType(definition.exerciseType),
-      restSeconds: definition.defaultRestSeconds ?? restTimerSettings.defaultSeconds,
-      sets: exercise.sets.map((set, index) => ({
-        ...createWorkoutSetFromDefinition(definition, `${definition.id}-${stamp}-${index}`),
-        setType: set.setType ?? 'normal',
-        rpe: set.rpe,
-        rir: set.rir,
-      })),
-    }));
-  }, [exercises, restTimerSettings.defaultSeconds, updateWorkoutExercise]);
+    updateWorkoutExercise(workoutExerciseId, (exercise) => {
+      const replacement: WorkoutExercise = {
+        ...exercise,
+        id: createUuid(),
+        exerciseDefinitionId: definition.id,
+        name: definition.name,
+        exerciseType: normalizeExerciseType(definition.exerciseType),
+        restSeconds: definition.defaultRestSeconds ?? restTimerSettings.defaultSeconds,
+        sets: exercise.sets.map((set, index) => ({
+          ...createWorkoutSetFromDefinition(definition, createUuid()),
+          setType: set.setType ?? 'normal',
+          rpe: set.rpe,
+          rir: set.rir,
+        })),
+      };
+      return applyPreviousPerformance([replacement], completedWorkouts)[0];
+    });
+  }, [completedWorkouts, exercises, restTimerSettings.defaultSeconds, updateWorkoutExercise]);
 
   const updateWorkoutNotes = useCallback((notes: string) => setWorkout((current) => current ? { ...current, notes } : current), []);
+  const updateWorkoutName = useCallback((name: string) => setWorkout((current) => current ? {
+    ...current,
+    name: name.slice(0, 80),
+  } : current), []);
   const updateWorkoutExerciseRestSeconds = useCallback((exerciseId: string, seconds: number) => {
     const safeSeconds = Math.max(15, Math.min(3600, Math.round(seconds)));
     updateWorkoutExercise(exerciseId, (exercise) => ({ ...exercise, restSeconds: safeSeconds }));
@@ -918,6 +1127,27 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
       notificationsEnabled: settings.notificationsEnabled ?? current.notificationsEnabled,
     }));
   }, [workout?.restTimerNotificationId]);
+
+  const updatePreferences = useCallback((updates: Partial<AppPreferences>) => {
+    setPreferences((current) => ({
+      weeklyWorkoutGoal: Math.max(
+        1,
+        Math.min(14, Math.round(updates.weeklyWorkoutGoal ?? current.weeklyWorkoutGoal)),
+      ),
+      weightUnit: updates.weightUnit === 'kg' || updates.weightUnit === 'lb'
+        ? updates.weightUnit
+        : current.weightUnit,
+      distanceUnit: updates.distanceUnit === 'km' || updates.distanceUnit === 'mi'
+        ? updates.distanceUnit
+        : current.distanceUnit,
+      preferredEffort:
+        updates.preferredEffort === 'rpe' ||
+        updates.preferredEffort === 'rir' ||
+        updates.preferredEffort === 'none'
+          ? updates.preferredEffort
+          : current.preferredEffort,
+    }));
+  }, []);
   const scheduleTimer = useCallback((seconds: number, sourceExerciseId?: string, durationSeconds?: number) => {
     const safeSeconds = Math.max(1, Math.min(3600, Math.round(seconds)));
     const safeDuration = Math.max(1, Math.min(3600, Math.round(durationSeconds ?? safeSeconds)));
@@ -1020,7 +1250,7 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
       setTemplates((current) => current.map((template) => template.id !== workout.sourceTemplateId ? template : {
         ...template,
         detail: getTemplateDetail(workout.exercises),
-        exercises: workout.exercises.map((exercise) => ({ ...exercise, sets: exercise.sets.map((set, index) => ({ ...set, id: `${template.id}-${exercise.id}-template-${index + 1}`, previousWeight: undefined, previousReps: undefined, previousDurationSeconds: undefined, previousDistance: undefined, completed: false })) })),
+        exercises: workout.exercises.map((exercise) => ({ ...exercise, sets: exercise.sets.map((set) => ({ ...set, id: createUuid(), previousWeight: undefined, previousReps: undefined, previousDurationSeconds: undefined, previousDistance: undefined, completed: false })) })),
       }));
     }
     restTimerGenerationRef.current += 1;
@@ -1030,47 +1260,150 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
     setWorkout(null);
   }, [templates, workout]);
 
+  const saveWorkoutForLater = useCallback(() => {
+    if (!workout) return false;
+    const now = Date.now();
+    const {
+      restTimerEndsAt: _restTimerEndsAt,
+      restTimerDurationSeconds: _restTimerDurationSeconds,
+      restTimerPausedSeconds: _restTimerPausedSeconds,
+      restTimerSourceExerciseId: _restTimerSourceExerciseId,
+      restTimerCompletedAt: _restTimerCompletedAt,
+      restTimerNotificationId: _restTimerNotificationId,
+      ...workoutWithoutTimer
+    } = workout;
+    restTimerGenerationRef.current += 1;
+    void cancelRestTimerAlert(restNotificationIdRef.current ?? workout.restTimerNotificationId);
+    restNotificationIdRef.current = undefined;
+    setIncompleteWorkouts((current) => [
+      { ...workoutWithoutTimer, savedAt: now, exercises: cloneExercises(workout.exercises) },
+      ...current.filter((item) => item.id !== workout.id),
+    ]);
+    setWorkout(null);
+    return true;
+  }, [workout]);
+
+  const resumeIncompleteWorkout = useCallback((workoutId: string) => {
+    if (workout) return false;
+    const incomplete = incompleteWorkouts.find((item) => item.id === workoutId);
+    if (!incomplete) return false;
+    const { savedAt, ...savedWorkout } = incomplete;
+    const pausedDuration = Math.max(0, Date.now() - savedAt);
+    setWorkout({
+      ...savedWorkout,
+      startedAt: savedWorkout.startedAt + pausedDuration,
+      exercises: cloneExercises(savedWorkout.exercises),
+    });
+    setIncompleteWorkouts((current) => current.filter((item) => item.id !== workoutId));
+    return true;
+  }, [incompleteWorkouts, workout]);
+
+  const deleteIncompleteWorkout = useCallback((workoutId: string) => {
+    if (!incompleteWorkouts.some((item) => item.id === workoutId)) return false;
+    setIncompleteWorkouts((current) => current.filter((item) => item.id !== workoutId));
+    return true;
+  }, [incompleteWorkouts]);
+
   const discardWorkout = useCallback(() => {
     restTimerGenerationRef.current += 1;
     void cancelRestTimerAlert(restNotificationIdRef.current ?? workout?.restTimerNotificationId);
     restNotificationIdRef.current = undefined;
     setWorkout(null);
   }, [workout?.restTimerNotificationId]);
-  const updateCompletedWorkout = useCallback((updated: CompletedWorkout) => setCompletedWorkouts((current) => current.map((item) => item.id === updated.id ? { ...updated, exercises: cloneExercises(updated.exercises) } : item)), []);
+
+  const createManualWorkout = useCallback((input: CreateManualWorkoutInput) => {
+    const name = input.name.trim();
+    const startedAt = Math.max(0, Math.round(input.startedAt));
+    const completedAt = Math.max(startedAt, Math.round(input.completedAt));
+    if (!name || input.exercises.length === 0 || !Number.isFinite(startedAt) || !Number.isFinite(completedAt)) {
+      return null;
+    }
+    const completedWorkout: CompletedWorkout = {
+      id: createUuid(),
+      name,
+      startedAt,
+      completedAt,
+      notes: input.notes?.trim() ?? '',
+      exercises: normalizeSupersetMembers(cloneExercises(input.exercises)),
+    };
+    setCompletedWorkouts((current) =>
+      [completedWorkout, ...current].sort((left, right) => right.startedAt - left.startedAt),
+    );
+    return completedWorkout;
+  }, []);
+  const updateCompletedWorkout = useCallback((updated: CompletedWorkout) => setCompletedWorkouts((current) => current.map((item) => item.id === updated.id ? {
+    ...updated,
+    exercises: normalizeSupersetMembers(cloneExercises(updated.exercises)),
+  } : item)), []);
   const deleteCompletedWorkout = useCallback((workoutId: string) => {
-    if (!completedWorkouts.some((item) => item.id === workoutId)) return false;
+    const deleted = completedWorkouts.find((item) => item.id === workoutId);
+    if (!deleted) return false;
+    setDeletedWorkouts((current) => [{ ...deleted, deletedAt: Date.now() }, ...current]);
     setCompletedWorkouts((current) => current.filter((item) => item.id !== workoutId));
     return true;
   }, [completedWorkouts]);
+
+  const restoreDeletedWorkout = useCallback((workoutId: string) => {
+    const deleted = deletedWorkouts.find((item) => item.id === workoutId);
+    if (!deleted) return false;
+    const { deletedAt: _deletedAt, ...restored } = deleted;
+    setCompletedWorkouts((current) =>
+      [...current, restored].sort((left, right) => right.startedAt - left.startedAt),
+    );
+    setDeletedWorkouts((current) => current.filter((item) => item.id !== workoutId));
+    return true;
+  }, [deletedWorkouts]);
+
+  const permanentlyDeleteWorkout = useCallback((workoutId: string) => {
+    if (!deletedWorkouts.some((item) => item.id === workoutId)) return false;
+    setDeletedWorkouts((current) => current.filter((item) => item.id !== workoutId));
+    return true;
+  }, [deletedWorkouts]);
 
   const repeatCompletedWorkout = useCallback((workoutId: string) => {
     if (workout) return false;
     const completed = completedWorkouts.find((item) => item.id === workoutId);
     if (!completed) return false;
     const stamp = Date.now();
-    setWorkout({ id: `workout-${stamp}`, name: completed.name, startedAt: stamp, sourceTemplateId: completed.sourceTemplateId, notes: '', exercises: completed.exercises.map((exercise, exerciseIndex) => ({ ...exercise, id: `${exercise.id}-repeat-${stamp}-${exerciseIndex}`, sets: exercise.sets.map((set, setIndex) => ({ ...set, id: `${set.id}-repeat-${stamp}-${setIndex}`, ...copyMetricValues(set), completed: false })) })) });
+    const repeatedExercises = completed.exercises.map((exercise, exerciseIndex) => ({
+      ...exercise,
+      id: createUuid(),
+      sets: exercise.sets.map((set, setIndex) => ({
+        ...set,
+        id: createUuid(),
+        ...copyMetricValues(set),
+        completed: false,
+      })),
+    }));
+    setWorkout({
+      id: createUuid(),
+      name: completed.name,
+      startedAt: stamp,
+      sourceTemplateId: completed.sourceTemplateId,
+      notes: '',
+      exercises: applyPreviousPerformance(repeatedExercises, [completed, ...completedWorkouts]),
+    });
     return true;
   }, [completedWorkouts, workout]);
 
   const saveCompletedWorkoutAsTemplate = useCallback((workoutId: string) => {
     const completed = completedWorkouts.find((item) => item.id === workoutId);
     if (!completed) return null;
-    const stamp = Date.now();
     const template: WorkoutTemplate = {
-      id: `${toId(completed.name) || 'history-template'}-${stamp}`,
+      id: createUuid(),
       name: `${completed.name} Copy`,
       folder: canonicalFolderName(folders, completed.sourceFolder || 'From History'),
       detail: getTemplateDetail(completed.exercises),
-      exercises: completed.exercises.map((exercise, exerciseIndex) => ({ ...exercise, id: `${exercise.id}-template-${stamp}-${exerciseIndex}`, sets: exercise.sets.map((set, setIndex) => ({ ...set, id: `${set.id}-template-${stamp}-${setIndex}`, previousWeight: undefined, previousReps: undefined, previousDurationSeconds: undefined, previousDistance: undefined, completed: false })) })),
+      exercises: completed.exercises.map((exercise) => ({ ...exercise, id: createUuid(), sets: exercise.sets.map((set) => ({ ...set, id: createUuid(), previousWeight: undefined, previousReps: undefined, previousDurationSeconds: undefined, previousDistance: undefined, completed: false })) })),
     };
     setFolders((current) => current.some((folder) => folder.name.toLowerCase() === template.folder.toLowerCase())
       ? current
-      : [...current, { id: `${toId(template.folder) || 'folder'}-${Date.now()}`, name: template.folder }]);
+      : [...current, { id: createUuid(), name: template.folder }]);
     setTemplates((current) => [...current, template]);
     return template;
   }, [completedWorkouts, folders]);
 
-  const getStateSnapshot = useCallback((): LiftFlowStateSnapshot => ({ restTimerSettings: { ...restTimerSettings }, exercises: exercises.map((item) => ({ ...item })), folders: folders.map((item) => ({ ...item })), templates: templates.map((item) => ({ ...item, exercises: cloneExercises(item.exercises) })), activeWorkout: workout ? { ...workout, restTimerNotificationId: undefined, exercises: cloneExercises(workout.exercises) } : null, completedWorkouts: completedWorkouts.map((item) => ({ ...item, exercises: cloneExercises(item.exercises) })) }), [completedWorkouts, exercises, folders, restTimerSettings, templates, workout]);
+  const getStateSnapshot = useCallback((): LiftFlowStateSnapshot => ({ restTimerSettings: { ...restTimerSettings }, preferences: { ...preferences }, exercises: exercises.map((item) => ({ ...item })), folders: folders.map((item) => ({ ...item })), templates: templates.map((item) => ({ ...item, exercises: cloneExercises(item.exercises) })), activeWorkout: workout ? { ...workout, restTimerNotificationId: undefined, exercises: cloneExercises(workout.exercises) } : null, incompleteWorkouts: incompleteWorkouts.map((item) => ({ ...item, exercises: cloneExercises(item.exercises) })), completedWorkouts: completedWorkouts.map((item) => ({ ...item, exercises: cloneExercises(item.exercises) })), deletedWorkouts: deletedWorkouts.map((item) => ({ ...item, exercises: cloneExercises(item.exercises) })) }), [completedWorkouts, deletedWorkouts, exercises, folders, incompleteWorkouts, preferences, restTimerSettings, templates, workout]);
 
   const restoreState = useCallback(async (snapshot: LiftFlowStateSnapshot) => {
     restTimerGenerationRef.current += 1;
@@ -1079,17 +1412,22 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
     const safeActiveWorkout = snapshot.activeWorkout
       ? { ...snapshot.activeWorkout, restTimerNotificationId: undefined, exercises: cloneExercises(snapshot.activeWorkout.exercises) }
       : null;
-    const safe: LiftFlowStateSnapshot = { restTimerSettings: { ...snapshot.restTimerSettings }, exercises: snapshot.exercises.map((item) => ({ ...item })), folders: snapshot.folders.map((item) => ({ ...item })), templates: snapshot.templates.map((item) => ({ ...item, exercises: cloneExercises(item.exercises) })), activeWorkout: safeActiveWorkout, completedWorkouts: snapshot.completedWorkouts.map((item) => ({ ...item, exercises: cloneExercises(item.exercises) })) };
+    const safe: LiftFlowStateSnapshot = { restTimerSettings: { ...snapshot.restTimerSettings }, preferences: { ...snapshot.preferences }, exercises: snapshot.exercises.map((item) => ({ ...item })), folders: snapshot.folders.map((item) => ({ ...item })), templates: snapshot.templates.map((item) => ({ ...item, exercises: cloneExercises(item.exercises) })), activeWorkout: safeActiveWorkout, incompleteWorkouts: snapshot.incompleteWorkouts.map((item) => ({ ...item, exercises: cloneExercises(item.exercises) })), completedWorkouts: snapshot.completedWorkouts.map((item) => ({ ...item, exercises: cloneExercises(item.exercises) })), deletedWorkouts: snapshot.deletedWorkouts.map((item) => ({ ...item, exercises: cloneExercises(item.exercises) })) };
+    await saveLiftFlowSafetyBackup({ restTimerSettings: { ...restTimerSettings }, preferences: { ...preferences }, exercises: exercises.map((item) => ({ ...item })), folders: folders.map((item) => ({ ...item })), templates: templates.map((item) => ({ ...item, exercises: cloneExercises(item.exercises) })), activeWorkout: workout ? { ...workout, restTimerNotificationId: undefined, exercises: cloneExercises(workout.exercises) } : null, incompleteWorkouts: incompleteWorkouts.map((item) => ({ ...item, exercises: cloneExercises(item.exercises) })), completedWorkouts: completedWorkouts.map((item) => ({ ...item, exercises: cloneExercises(item.exercises) })), deletedWorkouts: deletedWorkouts.map((item) => ({ ...item, exercises: cloneExercises(item.exercises) })) });
     await saveLiftFlowState(safe);
+    skipNextAutomaticSaveRef.current = true;
     setExercises(safe.exercises);
     setFolders(safe.folders);
     setTemplates(safe.templates);
     setWorkout(safe.activeWorkout);
+    setIncompleteWorkouts(safe.incompleteWorkouts);
     setCompletedWorkouts(safe.completedWorkouts);
+    setDeletedWorkouts(safe.deletedWorkouts);
     setRestTimerSettings(safe.restTimerSettings);
+    setPreferences(safe.preferences);
     setPersistenceStatus('saved');
     setLastSavedAt(Date.now());
-  }, [workout?.restTimerNotificationId]);
+  }, [completedWorkouts, deletedWorkouts, exercises, folders, incompleteWorkouts, preferences, restTimerSettings, templates, workout]);
 
   const { completedSetCount, totalSetCount } = useMemo(() => {
     const sets = workout?.exercises.flatMap((exercise) => exercise.sets) ?? [];
@@ -1097,24 +1435,24 @@ export function ActiveWorkoutProvider({ children }: PropsWithChildren) {
   }, [workout]);
 
   const value = useMemo<ActiveWorkoutContextValue>(() => ({
-    workout, exercises, folders, templates, completedWorkouts, completedSetCount, totalSetCount, persistenceStatus, lastSavedAt, restTimerSettings,
-    createExercise, updateExercise, setExerciseArchived, deleteExercise, getExerciseUsage,
-    createFolder, renameFolder, deleteFolder, moveFolder,
+    workout, exercises, folders, templates, incompleteWorkouts, completedWorkouts, deletedWorkouts, completedSetCount, totalSetCount, persistenceStatus, lastSavedAt, restTimerSettings, preferences,
+    createExercise, updateExercise, setExerciseArchived, toggleExerciseFavorite, deleteExercise, getExerciseUsage,
+    createFolder, renameFolder, deleteFolder, moveFolder, setFolderArchived,
     createTemplate, updateTemplate, duplicateTemplate, moveTemplate, moveTemplateToFolder, setTemplateArchived, deleteTemplate, startWorkout, toggleSet, setSetType, toggleSetType,
     updateSetValue, updateSetEffort, copyPreviousSet, addSet, removeSet, moveSet, addExercise,
-    removeExercise, moveExercise, replaceExercise, updateExerciseNotes, updateWorkoutNotes,
-    updateWorkoutExerciseRestSeconds, updateRestTimerSettings, setRestTimer, adjustRestTimer, pauseRestTimer, resumeRestTimer, restartRestTimer, clearRestTimer, acknowledgeRestTimerComplete, finishWorkout, discardWorkout, updateCompletedWorkout,
-    deleteCompletedWorkout, repeatCompletedWorkout, saveCompletedWorkoutAsTemplate,
+    removeExercise, moveExercise, replaceExercise, createSuperset, removeFromSuperset, updateExerciseNotes, updateWorkoutNotes, updateWorkoutName,
+    updateWorkoutExerciseRestSeconds, updateRestTimerSettings, updatePreferences, setRestTimer, adjustRestTimer, pauseRestTimer, resumeRestTimer, restartRestTimer, clearRestTimer, acknowledgeRestTimerComplete, finishWorkout, saveWorkoutForLater, resumeIncompleteWorkout, deleteIncompleteWorkout, discardWorkout, createManualWorkout, updateCompletedWorkout,
+    deleteCompletedWorkout, restoreDeletedWorkout, permanentlyDeleteWorkout, repeatCompletedWorkout, saveCompletedWorkoutAsTemplate,
     getStateSnapshot, restoreState,
   }), [
-    workout, exercises, folders, templates, completedWorkouts, completedSetCount, totalSetCount, persistenceStatus, lastSavedAt, restTimerSettings,
-    createExercise, updateExercise, setExerciseArchived, deleteExercise, getExerciseUsage,
-    createFolder, renameFolder, deleteFolder, moveFolder,
+    workout, exercises, folders, templates, incompleteWorkouts, completedWorkouts, deletedWorkouts, completedSetCount, totalSetCount, persistenceStatus, lastSavedAt, restTimerSettings, preferences,
+    createExercise, updateExercise, setExerciseArchived, toggleExerciseFavorite, deleteExercise, getExerciseUsage,
+    createFolder, renameFolder, deleteFolder, moveFolder, setFolderArchived,
     createTemplate, updateTemplate, duplicateTemplate, moveTemplate, moveTemplateToFolder, setTemplateArchived, deleteTemplate, startWorkout, toggleSet, setSetType, toggleSetType,
     updateSetValue, updateSetEffort, copyPreviousSet, addSet, removeSet, moveSet, addExercise,
-    removeExercise, moveExercise, replaceExercise, updateExerciseNotes, updateWorkoutNotes,
-    updateWorkoutExerciseRestSeconds, updateRestTimerSettings, setRestTimer, adjustRestTimer, pauseRestTimer, resumeRestTimer, restartRestTimer, clearRestTimer, acknowledgeRestTimerComplete, finishWorkout, discardWorkout, updateCompletedWorkout,
-    deleteCompletedWorkout, repeatCompletedWorkout, saveCompletedWorkoutAsTemplate, getStateSnapshot, restoreState,
+    removeExercise, moveExercise, replaceExercise, createSuperset, removeFromSuperset, updateExerciseNotes, updateWorkoutNotes, updateWorkoutName,
+    updateWorkoutExerciseRestSeconds, updateRestTimerSettings, updatePreferences, setRestTimer, adjustRestTimer, pauseRestTimer, resumeRestTimer, restartRestTimer, clearRestTimer, acknowledgeRestTimerComplete, finishWorkout, saveWorkoutForLater, resumeIncompleteWorkout, deleteIncompleteWorkout, discardWorkout, createManualWorkout, updateCompletedWorkout,
+    deleteCompletedWorkout, restoreDeletedWorkout, permanentlyDeleteWorkout, repeatCompletedWorkout, saveCompletedWorkoutAsTemplate, getStateSnapshot, restoreState,
   ]);
 
   if (!isHydrated) return (

@@ -1,7 +1,10 @@
 import { exerciseLibrary, type ExerciseDefinition } from '@/constants/exercises';
 import type {
   ActiveWorkout,
+  AppPreferences,
   CompletedWorkout,
+  DeletedWorkout,
+  IncompleteWorkout,
   LiftFlowStateSnapshot,
   WorkoutExercise,
   WorkoutFolder,
@@ -15,7 +18,8 @@ import {
   normalizeExerciseType,
 } from '@/lib/exerciseTracking';
 
-export const STORAGE_VERSION = 7 as const;
+export const STORAGE_VERSION = 12 as const;
+export const RECENTLY_DELETED_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 export type PersistedLiftFlowState = LiftFlowStateSnapshot & {
   version: typeof STORAGE_VERSION;
@@ -59,6 +63,22 @@ function normalizeRestTimerSettings(raw: unknown): RestTimerSettings {
     autoStart: safeBoolean(settings.autoStart, true),
     vibrationEnabled: safeBoolean(settings.vibrationEnabled, true),
     notificationsEnabled: safeBoolean(settings.notificationsEnabled, false),
+  };
+}
+
+function normalizePreferences(raw: unknown): AppPreferences {
+  const preferences = raw && typeof raw === 'object' ? raw as Partial<AppPreferences> : {};
+  return {
+    weeklyWorkoutGoal: Math.max(
+      1,
+      Math.min(14, Math.round(safeNumber(preferences.weeklyWorkoutGoal) ?? 3)),
+    ),
+    weightUnit: preferences.weightUnit === 'kg' ? 'kg' : 'lb',
+    distanceUnit: preferences.distanceUnit === 'km' ? 'km' : 'mi',
+    preferredEffort:
+      preferences.preferredEffort === 'rir' || preferences.preferredEffort === 'none'
+        ? preferences.preferredEffort
+        : 'rpe',
   };
 }
 
@@ -134,6 +154,7 @@ function normalizeExercise(
     exerciseType,
     restSeconds: normalizeRestSeconds(exercise.restSeconds ?? definition?.defaultRestSeconds),
     notes: safeString(exercise.notes),
+    supersetId: safeString(exercise.supersetId) || undefined,
     sets,
   };
 }
@@ -144,11 +165,20 @@ function normalizeExercises(
   definitions: ExerciseDefinition[],
 ): WorkoutExercise[] {
   if (!Array.isArray(raw)) return [];
-  return raw
+  const exercises = raw
     .map((exercise, index) =>
       normalizeExercise(exercise, `${prefix}-exercise-${index + 1}`, definitions),
     )
     .filter((exercise): exercise is WorkoutExercise => Boolean(exercise));
+  const supersetCounts = new Map<string, number>();
+  exercises.forEach((exercise) => {
+    if (exercise.supersetId) supersetCounts.set(exercise.supersetId, (supersetCounts.get(exercise.supersetId) ?? 0) + 1);
+  });
+  return exercises.map((exercise) =>
+    exercise.supersetId && (supersetCounts.get(exercise.supersetId) ?? 0) < 2
+      ? { ...exercise, supersetId: undefined }
+      : exercise,
+  );
 }
 
 function normalizeTemplate(
@@ -167,7 +197,7 @@ function normalizeTemplate(
   return {
     id,
     name,
-    folder: safeString(template.folder, 'My Workouts').trim() || 'My Workouts',
+    folder: safeString(template.folder).trim(),
     detail: `${exercises.length} exercise${exercises.length === 1 ? '' : 's'} · ${setCount} planned sets`,
     archived: Boolean(template.archived),
     exercises,
@@ -184,7 +214,11 @@ function normalizeFolder(raw: unknown, index: number): WorkoutFolder | null {
   const folder = raw as Partial<WorkoutFolder>;
   const name = safeString(folder.name).trim();
   if (!name) return null;
-  return { id: safeString(folder.id, `folder-${index + 1}`), name };
+  return {
+    id: safeString(folder.id, `folder-${index + 1}`),
+    name,
+    archived: Boolean(folder.archived),
+  };
 }
 
 function normalizeFolders(raw: unknown, templates: WorkoutTemplate[]): WorkoutFolder[] {
@@ -200,8 +234,9 @@ function normalizeFolders(raw: unknown, templates: WorkoutTemplate[]): WorkoutFo
     result.push(folder);
   };
   normalized.forEach(add);
-  templates.forEach((template, index) => add({ id: `migrated-folder-${index + 1}`, name: template.folder }));
-  if (result.length === 0) add({ id: 'my-workouts', name: 'My Workouts' });
+  templates.forEach((template, index) => {
+    if (template.folder) add({ id: `migrated-folder-${index + 1}`, name: template.folder });
+  });
   return result;
 }
 
@@ -245,16 +280,50 @@ function normalizeCompletedWorkout(
     return null;
   }
   const id = safeString(workout.id, `completed-${workout.completedAt}-${index}`);
+  const importedFromStrong = workout.importSource === 'strong';
+  const rawDurationSeconds = Math.max(0, Math.floor((workout.completedAt - workout.startedAt) / 1000));
+  const durationUnknown = Boolean(workout.durationUnknown) ||
+    (importedFromStrong && rawDurationSeconds > 6 * 60 * 60);
   return {
     id,
     name,
     startedAt: workout.startedAt,
-    completedAt: workout.completedAt,
+    completedAt: durationUnknown ? workout.startedAt + 60 * 1000 : workout.completedAt,
     sourceTemplateId: safeString(workout.sourceTemplateId) || undefined,
     sourceFolder: safeString(workout.sourceFolder) || undefined,
     notes: safeString(workout.notes),
     exercises: normalizeExercises(workout.exercises, id, definitions),
+    importSource: workout.importSource === 'strong' ? 'strong' : undefined,
+    importBatchId: safeString(workout.importBatchId) || undefined,
+    importFingerprint: safeString(workout.importFingerprint) || undefined,
+    importedAt: safeNumber(workout.importedAt),
+    durationUnknown: durationUnknown || undefined,
   };
+}
+
+function normalizeIncompleteWorkout(
+  raw: unknown,
+  definitions: ExerciseDefinition[],
+): IncompleteWorkout | null {
+  const workout = normalizeActiveWorkout(raw, definitions);
+  if (!workout || !raw || typeof raw !== 'object') return null;
+  const savedAt = safeNumber((raw as Partial<IncompleteWorkout>).savedAt);
+  if (savedAt === undefined) return null;
+  return { ...workout, savedAt };
+}
+
+function normalizeDeletedWorkout(
+  raw: unknown,
+  index: number,
+  definitions: ExerciseDefinition[],
+): DeletedWorkout | null {
+  const workout = normalizeCompletedWorkout(raw, index, definitions);
+  if (!workout || !raw || typeof raw !== 'object') return null;
+  const deletedAt = safeNumber((raw as Partial<DeletedWorkout>).deletedAt);
+  if (deletedAt === undefined || Date.now() - deletedAt > RECENTLY_DELETED_RETENTION_MS) {
+    return null;
+  }
+  return { ...workout, deletedAt };
 }
 
 function normalizeDefinition(raw: unknown): ExerciseDefinition | null {
@@ -292,6 +361,7 @@ function normalizeDefinition(raw: unknown): ExerciseDefinition | null {
         ? safeNumber(exercise.defaultDistance)
         : undefined,
     defaultRestSeconds: normalizeRestSeconds(exercise.defaultRestSeconds),
+    instructions: safeString(exercise.instructions).trim() || undefined,
     favorite: Boolean(exercise.favorite),
     recent: Boolean(exercise.recent),
     isCustom: Boolean(exercise.isCustom),
@@ -299,13 +369,15 @@ function normalizeDefinition(raw: unknown): ExerciseDefinition | null {
     previousNames: Array.isArray(exercise.previousNames)
       ? exercise.previousNames.filter((item): item is string => typeof item === 'string')
       : undefined,
+    importSource: exercise.importSource === 'strong' ? 'strong' : undefined,
+    importBatchId: safeString(exercise.importBatchId) || undefined,
   };
 }
 
 export function normalizeLiftFlowState(raw: unknown): PersistedLiftFlowState | null {
   if (!raw || typeof raw !== 'object') return null;
   const state = raw as StoredState;
-  if (![1, 2, 3, 4, 5, 6, STORAGE_VERSION].includes(state.version ?? 0)) return null;
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, STORAGE_VERSION].includes(state.version ?? 0)) return null;
   if (!Array.isArray(state.templates) || !Array.isArray(state.completedWorkouts)) return null;
 
   const exercises = Array.isArray(state.exercises)
@@ -325,6 +397,18 @@ export function normalizeLiftFlowState(raw: unknown): PersistedLiftFlowState | n
     .map((workout, index) => normalizeCompletedWorkout(workout, index, safeExercises))
     .filter((workout): workout is CompletedWorkout => Boolean(workout));
 
+  const deletedWorkouts = Array.isArray(state.deletedWorkouts)
+    ? state.deletedWorkouts
+        .map((workout, index) => normalizeDeletedWorkout(workout, index, safeExercises))
+        .filter((workout): workout is DeletedWorkout => Boolean(workout))
+    : [];
+
+  const incompleteWorkouts = Array.isArray(state.incompleteWorkouts)
+    ? state.incompleteWorkouts
+        .map((workout) => normalizeIncompleteWorkout(workout, safeExercises))
+        .filter((workout): workout is IncompleteWorkout => Boolean(workout))
+    : [];
+
   return {
     version: STORAGE_VERSION,
     app: 'LiftFlow',
@@ -333,8 +417,11 @@ export function normalizeLiftFlowState(raw: unknown): PersistedLiftFlowState | n
     folders,
     templates,
     activeWorkout: normalizeActiveWorkout(state.activeWorkout, safeExercises),
+    incompleteWorkouts,
     completedWorkouts,
+    deletedWorkouts,
     restTimerSettings: normalizeRestTimerSettings(state.restTimerSettings),
+    preferences: normalizePreferences(state.preferences),
   };
 }
 

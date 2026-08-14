@@ -4,6 +4,7 @@ import type {
   WorkoutExercise,
   WorkoutSet,
 } from '@/context/ActiveWorkoutContext';
+import { estimateOneRepMax, getWorkoutDateTimestamp } from '@/lib/workoutStats';
 import { formatSeconds, formatSetMetrics } from '@/lib/exerciseTracking';
 
 export type ExerciseRecordKey =
@@ -124,7 +125,7 @@ export function buildExerciseProgress(
       entries.push({
         workoutId: workout.id,
         workoutName: workout.name,
-        completedAt: workout.completedAt,
+        completedAt: getWorkoutDateTimestamp(workout),
         completedSetCount: completedSets.length,
         workingSetCount: workingSets.length,
         bestSetLabel: bestSet
@@ -139,7 +140,7 @@ export function buildExerciseProgress(
 
   const observations = collectObservations(definition, completedWorkouts);
   const records = buildRecords(definition.exerciseType, observations);
-  const recentPrs = buildExercisePrTimeline(definition, completedWorkouts).slice(0, 8);
+  const recentPrs = buildExercisePrTimeline(definition, completedWorkouts);
 
   return {
     exerciseId: definition.id,
@@ -148,7 +149,7 @@ export function buildExerciseProgress(
     totalSessions: sessions.length,
     totalCompletedSets: sessions.reduce((total, session) => total + session.completedSetCount, 0),
     records,
-    recentHistory: sessions.slice(0, 8),
+    recentHistory: sessions,
     recentPrs,
   };
 }
@@ -196,7 +197,7 @@ function collectObservations(
           exercise.sets.map((set, setIndex) => ({
             workoutId: workout.id,
             workoutName: workout.name,
-            completedAt: workout.completedAt,
+            completedAt: getWorkoutDateTimestamp(workout),
             exercise,
             set,
             setIndex,
@@ -280,6 +281,13 @@ export function buildExercisePrTimeline(
   return achievements.sort((a, b) => b.achievedAt - a.achievedAt);
 }
 
+export function hasQualifyingProgressMetrics(
+  exerciseType: ExerciseType,
+  set: WorkoutSet,
+): boolean {
+  return metricCandidates(exerciseType, set).length > 0;
+}
+
 function metricCandidates(
   exerciseType: ExerciseType,
   set: WorkoutSet,
@@ -291,7 +299,9 @@ function metricCandidates(
   const distance = validMetric(set.distance);
 
   if (exerciseType === 'Weight & Reps' || exerciseType === 'Bodyweight + Added Weight') {
-    if (weight !== undefined) {
+    // Strong can export failed attempts as a completed row with a weight but 0 reps.
+    // Keep those rows in History, but never let them become a weight, e1RM, or volume PR.
+    if (weight !== undefined && reps !== undefined && reps > 0) {
       candidates.push({
         key: 'weight',
         label: exerciseType === 'Bodyweight + Added Weight' ? 'Added Weight PR' : 'Weight PR',
@@ -300,7 +310,7 @@ function metricCandidates(
         higherIsBetter: true,
       });
     }
-    if (reps !== undefined) {
+    if (reps !== undefined && reps > 0) {
       candidates.push({
         key: 'reps',
         label: 'Rep PR',
@@ -310,14 +320,16 @@ function metricCandidates(
       });
     }
     if (weight !== undefined && reps !== undefined && weight > 0 && reps > 0) {
-      const estimatedOneRepMax = weight * (1 + reps / 30);
-      candidates.push({
-        key: 'estimatedOneRepMax',
-        label: 'e1RM PR',
-        value: estimatedOneRepMax,
-        displayValue: `${formatNumber(estimatedOneRepMax)} lb`,
-        higherIsBetter: true,
-      });
+      const estimatedOneRepMax = estimateOneRepMax(weight, reps);
+      if (estimatedOneRepMax !== undefined) {
+        candidates.push({
+          key: 'estimatedOneRepMax',
+          label: 'e1RM PR',
+          value: estimatedOneRepMax,
+          displayValue: `${formatNumber(estimatedOneRepMax)} lb`,
+          higherIsBetter: true,
+        });
+      }
       const setVolume = weight * reps;
       candidates.push({
         key: 'setVolume',
@@ -328,7 +340,7 @@ function metricCandidates(
       });
     }
   } else if (exerciseType === 'Assisted Bodyweight') {
-    if (weight !== undefined) {
+    if (weight !== undefined && reps !== undefined && reps > 0) {
       candidates.push({
         key: 'assistance',
         label: 'Assistance PR',
@@ -337,7 +349,7 @@ function metricCandidates(
         higherIsBetter: false,
       });
     }
-    if (reps !== undefined) {
+    if (reps !== undefined && reps > 0) {
       candidates.push({
         key: 'reps',
         label: 'Rep PR',
@@ -347,7 +359,7 @@ function metricCandidates(
       });
     }
   } else if (exerciseType === 'Bodyweight & Reps' || exerciseType === 'Reps Only') {
-    if (reps !== undefined) {
+    if (reps !== undefined && reps > 0) {
       candidates.push({
         key: 'reps',
         label: 'Rep PR',
@@ -357,7 +369,7 @@ function metricCandidates(
       });
     }
   } else if (exerciseType === 'Duration') {
-    if (duration !== undefined) {
+    if (duration !== undefined && duration > 0) {
       candidates.push({
         key: 'duration',
         label: 'Duration PR',
@@ -367,7 +379,7 @@ function metricCandidates(
       });
     }
   } else if (exerciseType === 'Distance & Duration') {
-    if (distance !== undefined) {
+    if (distance !== undefined && distance > 0) {
       candidates.push({
         key: 'distance',
         label: 'Distance PR',
@@ -376,7 +388,7 @@ function metricCandidates(
         higherIsBetter: true,
       });
     }
-    if (duration !== undefined) {
+    if (duration !== undefined && duration > 0) {
       candidates.push({
         key: 'duration',
         label: 'Duration PR',
@@ -432,7 +444,7 @@ function getSetScore(exerciseType: ExerciseType, set: WorkoutSet): number {
   switch (exerciseType) {
     case 'Weight & Reps':
     case 'Bodyweight + Added Weight':
-      return weight > 0 && reps > 0 ? weight * (1 + reps / 30) : weight * 1000 + reps;
+      return estimateOneRepMax(weight, reps) ?? (weight * 1000 + reps);
     case 'Assisted Bodyweight':
       return (100000 - weight * 100) + reps;
     case 'Bodyweight & Reps':
@@ -451,7 +463,12 @@ function getSessionVolume(exerciseType: ExerciseType, sets: WorkoutSet[]): numbe
   }
 
   return sets.reduce((total, set) => {
-    if (set.weight === undefined || set.reps === undefined) return total;
+    if (
+      set.weight === undefined ||
+      set.reps === undefined ||
+      set.weight <= 0 ||
+      set.reps <= 0
+    ) return total;
     return total + set.weight * set.reps;
   }, 0);
 }

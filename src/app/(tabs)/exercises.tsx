@@ -15,6 +15,7 @@ import {
   KeyboardAwareModal,
   NUMERIC_KEYBOARD_ACCESSORY_ID,
 } from '@/components/KeyboardAwareModal';
+import { ExerciseProgressChart } from '@/components/ExerciseProgressChart';
 import { PrimaryButton } from '@/components/PrimaryButton';
 import { SectionCard } from '@/components/SectionCard';
 import { ExerciseDefinition, ExerciseType } from '@/constants/exercises';
@@ -22,6 +23,7 @@ import { colors, radius, spacing } from '@/constants/theme';
 import {
   CreateExerciseInput,
   ExerciseUsage,
+  type CompletedWorkout,
   useActiveWorkout,
 } from '@/context/ActiveWorkoutContext';
 import {
@@ -38,10 +40,9 @@ import {
 } from '@/lib/exerciseProgress';
 import { showPrototypeNotice } from '@/lib/prototypeNotice';
 
-const muscleOptions = ['All', 'Chest', 'Back', 'Shoulders', 'Quadriceps', 'Hamstrings'];
-const equipmentOptions = ['All', 'Barbell', 'Dumbbell', 'Cable', 'Machine', 'Bodyweight'];
 const typeOptions: Array<'All' | ExerciseType> = ['All', ...EXERCISE_TYPE_OPTIONS];
 const emptyUsage: ExerciseUsage = { templates: 0, completedWorkouts: 0, activeWorkout: false };
+type FilterKind = 'muscle' | 'equipment' | 'type';
 
 export default function ExercisesScreen() {
   const {
@@ -51,10 +52,12 @@ export default function ExercisesScreen() {
     createExercise,
     updateExercise,
     setExerciseArchived,
+    toggleExerciseFavorite,
     deleteExercise,
     getExerciseUsage,
     completedWorkouts,
     restTimerSettings,
+    preferences,
   } = useActiveWorkout();
   const [query, setQuery] = useState('');
   const [muscle, setMuscle] = useState('All');
@@ -64,6 +67,16 @@ export default function ExercisesScreen() {
   const [editingExerciseId, setEditingExerciseId] = useState<string | null>(null);
   const [createVisible, setCreateVisible] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const [filterPicker, setFilterPicker] = useState<FilterKind | null>(null);
+
+  const muscleOptions = useMemo(
+    () => ['All', ...Array.from(new Set(exercises.filter((item) => !item.archived).map((item) => item.primaryMuscle))).sort()],
+    [exercises],
+  );
+  const equipmentOptions = useMemo(
+    () => ['All', ...Array.from(new Set(exercises.filter((item) => !item.archived).map((item) => item.equipment))).sort()],
+    [exercises],
+  );
 
   const selectedExercise = selectedExerciseId
     ? exercises.find((exercise) => exercise.id === selectedExerciseId) ?? null
@@ -102,7 +115,22 @@ export default function ExercisesScreen() {
   }, [exercises, query]);
 
   const favorites = filteredExercises.filter((exercise) => exercise.favorite);
-  const recent = filteredExercises.filter((exercise) => exercise.recent);
+  const recentExerciseIds = useMemo(() => {
+    const ids: string[] = [];
+    [...completedWorkouts]
+      .sort((left, right) => right.startedAt - left.startedAt)
+      .forEach((completed) => completed.exercises.forEach((historicExercise) => {
+        const definition = exercises.find((candidate) =>
+          candidate.id === historicExercise.exerciseDefinitionId ||
+          candidate.name.trim().toLowerCase() === historicExercise.name.trim().toLowerCase(),
+        );
+        if (definition && !ids.includes(definition.id)) ids.push(definition.id);
+      }));
+    return ids.slice(0, 8);
+  }, [completedWorkouts, exercises]);
+  const recent = recentExerciseIds
+    .map((id) => filteredExercises.find((exercise) => exercise.id === id))
+    .filter((exercise): exercise is ExerciseDefinition => Boolean(exercise));
   const customExercises = filteredExercises.filter((exercise) => exercise.isCustom);
   const selectedUsage = selectedExercise
     ? getExerciseUsage(selectedExercise.id)
@@ -265,17 +293,17 @@ export default function ExercisesScreen() {
           <FilterChip
             label={muscle === 'All' ? 'Muscle' : muscle}
             active={muscle !== 'All'}
-            onPress={() => setMuscle(nextOption(muscleOptions, muscle))}
+            onPress={() => setFilterPicker('muscle')}
           />
           <FilterChip
             label={equipment === 'All' ? 'Equipment' : equipment}
             active={equipment !== 'All'}
-            onPress={() => setEquipment(nextOption(equipmentOptions, equipment))}
+            onPress={() => setFilterPicker('equipment')}
           />
           <FilterChip
             label={exerciseType === 'All' ? 'Type' : exerciseType}
             active={exerciseType !== 'All'}
-            onPress={() => setExerciseType(nextOption(typeOptions, exerciseType))}
+            onPress={() => setFilterPicker('type')}
           />
         </View>
 
@@ -354,9 +382,12 @@ export default function ExercisesScreen() {
         exercise={selectedExercise}
         usage={selectedUsage}
         progress={selectedProgress}
+        completedWorkouts={completedWorkouts}
+        weightUnit={preferences.weightUnit}
         hasActiveWorkout={Boolean(workout)}
         onClose={() => setSelectedExerciseId(null)}
         onAdd={() => selectedExercise && addToWorkout(selectedExercise)}
+        onToggleFavorite={() => selectedExercise && toggleExerciseFavorite(selectedExercise.id)}
         onEdit={() => {
           if (!selectedExercise?.isCustom) return;
           setEditingExerciseId(selectedExercise.id);
@@ -381,6 +412,20 @@ export default function ExercisesScreen() {
         globalDefaultRestSeconds={restTimerSettings.defaultSeconds}
         onClose={() => setEditingExerciseId(null)}
         onSave={saveEditedExercise}
+      />
+
+      <FilterPickerModal
+        title={filterPicker === 'muscle' ? 'Filter by Muscle' : filterPicker === 'equipment' ? 'Filter by Equipment' : 'Filter by Tracking Type'}
+        visible={Boolean(filterPicker)}
+        options={filterPicker === 'muscle' ? muscleOptions : filterPicker === 'equipment' ? equipmentOptions : typeOptions}
+        selected={filterPicker === 'muscle' ? muscle : filterPicker === 'equipment' ? equipment : exerciseType}
+        onClose={() => setFilterPicker(null)}
+        onSelect={(value) => {
+          if (filterPicker === 'muscle') setMuscle(value);
+          if (filterPicker === 'equipment') setEquipment(value);
+          if (filterPicker === 'type') setExerciseType(value as 'All' | ExerciseType);
+          setFilterPicker(null);
+        }}
       />
     </>
   );
@@ -462,13 +507,60 @@ function FilterChip({
   );
 }
 
+function FilterPickerModal({
+  title,
+  visible,
+  options,
+  selected,
+  onClose,
+  onSelect,
+}: {
+  title: string;
+  visible: boolean;
+  options: readonly string[];
+  selected: string;
+  onClose: () => void;
+  onSelect: (value: string) => void;
+}) {
+  return (
+    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
+      <View style={styles.modalBackdrop}>
+        <View style={styles.filterModalCard}>
+          <Text style={styles.modalTitle}>{title}</Text>
+          <ScrollView style={styles.filterOptionList}>
+            {options.map((option) => {
+              const active = option === selected;
+              return (
+                <Pressable
+                  key={option}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active }}
+                  onPress={() => onSelect(option)}
+                  style={({ pressed }) => [styles.filterOption, active && styles.filterOptionActive, pressed && styles.rowPressed]}
+                >
+                  <Text style={[styles.filterOptionLabel, active && styles.filterOptionLabelActive]}>{option}</Text>
+                  <Text style={active ? styles.filterOptionCheckActive : styles.filterOptionCheck}>{active ? '✓' : '›'}</Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+          <PrimaryButton label="Cancel" onPress={onClose} variant="secondary" />
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 function ExerciseDetailModal({
   exercise,
   usage,
   progress,
+  completedWorkouts,
+  weightUnit,
   hasActiveWorkout,
   onClose,
   onAdd,
+  onToggleFavorite,
   onEdit,
   onArchive,
   onRestore,
@@ -477,15 +569,25 @@ function ExerciseDetailModal({
   exercise: ExerciseDefinition | null;
   usage: ExerciseUsage;
   progress: ExerciseProgressSummary | null;
+  completedWorkouts: CompletedWorkout[];
+  weightUnit: 'lb' | 'kg';
   hasActiveWorkout: boolean;
   onClose: () => void;
   onAdd: () => void;
+  onToggleFavorite: () => void;
   onEdit: () => void;
   onArchive: () => void;
   onRestore: () => void;
   onDelete: () => void;
 }) {
   const used = hasUsage(usage);
+  const [showAllPrs, setShowAllPrs] = useState(false);
+  const [showAllHistory, setShowAllHistory] = useState(false);
+
+  useEffect(() => {
+    setShowAllPrs(false);
+    setShowAllHistory(false);
+  }, [exercise?.id]);
 
   return (
     <Modal transparent visible={Boolean(exercise)} animationType="fade" onRequestClose={onClose}>
@@ -547,6 +649,13 @@ function ExerciseDetailModal({
                   ) : null}
                 </View>
 
+                {exercise.instructions ? (
+                  <View style={styles.usageBox}>
+                    <Text style={styles.usageTitle}>Instructions & notes</Text>
+                    <Text style={styles.usageCopy}>{exercise.instructions}</Text>
+                  </View>
+                ) : null}
+
                 <View style={styles.performanceSection}>
                   <View style={styles.performanceTitleRow}>
                     <Text style={styles.performanceTitle}>Performance</Text>
@@ -576,10 +685,21 @@ function ExerciseDetailModal({
                     </View>
                   )}
 
+                  {progress && progress.totalSessions > 0 ? (
+                    <View style={styles.performanceList}>
+                      <Text style={styles.performanceSubheading}>Progress chart</Text>
+                      <ExerciseProgressChart
+                        exercise={exercise}
+                        completedWorkouts={completedWorkouts}
+                        showRangeControls
+                      />
+                    </View>
+                  ) : null}
+
                   {progress && progress.recentPrs.length > 0 ? (
                     <View style={styles.performanceList}>
-                      <Text style={styles.performanceSubheading}>Recent PRs</Text>
-                      {progress.recentPrs.slice(0, 4).map((pr) => (
+                      <Text style={styles.performanceSubheading}>PR history</Text>
+                      {(showAllPrs ? progress.recentPrs : progress.recentPrs.slice(0, 4)).map((pr) => (
                         <View key={pr.id} style={styles.performanceRow}>
                           <View style={styles.performanceRowCopy}>
                             <Text style={styles.performanceRowTitle}>{pr.label}</Text>
@@ -590,13 +710,20 @@ function ExerciseDetailModal({
                           <Text style={styles.performanceRowValue}>{pr.displayValue}</Text>
                         </View>
                       ))}
+                      {progress.recentPrs.length > 4 ? (
+                        <PrimaryButton
+                          label={showAllPrs ? 'Show Recent PRs' : `Show All ${progress.recentPrs.length} PRs`}
+                          variant="secondary"
+                          onPress={() => setShowAllPrs((current) => !current)}
+                        />
+                      ) : null}
                     </View>
                   ) : null}
 
                   {progress && progress.recentHistory.length > 0 ? (
                     <View style={styles.performanceList}>
-                      <Text style={styles.performanceSubheading}>Recent history</Text>
-                      {progress.recentHistory.slice(0, 5).map((entry) => (
+                      <Text style={styles.performanceSubheading}>Workout history</Text>
+                      {(showAllHistory ? progress.recentHistory : progress.recentHistory.slice(0, 5)).map((entry) => (
                         <View key={entry.workoutId} style={styles.performanceRow}>
                           <View style={styles.performanceRowCopy}>
                             <Text style={styles.performanceRowTitle}>{entry.workoutName}</Text>
@@ -607,11 +734,18 @@ function ExerciseDetailModal({
                           <View style={styles.performanceRowRight}>
                             <Text style={styles.performanceRowValue}>{entry.bestSetLabel}</Text>
                             {entry.totalVolume ? (
-                              <Text style={styles.performanceRowSubtitle}>{Math.round(entry.totalVolume).toLocaleString()} lb volume</Text>
+                              <Text style={styles.performanceRowSubtitle}>{Math.round(entry.totalVolume).toLocaleString()} {weightUnit} volume</Text>
                             ) : null}
                           </View>
                         </View>
                       ))}
+                      {progress.recentHistory.length > 5 ? (
+                        <PrimaryButton
+                          label={showAllHistory ? 'Show Recent Workouts' : `Show All ${progress.recentHistory.length} Workouts`}
+                          variant="secondary"
+                          onPress={() => setShowAllHistory((current) => !current)}
+                        />
+                      ) : null}
                     </View>
                   ) : null}
                 </View>
@@ -637,6 +771,14 @@ function ExerciseDetailModal({
                       details here.
                     </Text>
                   </View>
+                ) : null}
+
+                {!exercise.archived ? (
+                  <PrimaryButton
+                    label={exercise.favorite ? 'Remove from Favorites' : 'Add to Favorites'}
+                    onPress={onToggleFavorite}
+                    variant="secondary"
+                  />
                 ) : null}
 
                 {exercise.isCustom ? (
@@ -685,6 +827,7 @@ function ExerciseFormModal({
   const [defaultDurationSeconds, setDefaultDurationSeconds] = useState('60');
   const [defaultDistance, setDefaultDistance] = useState('');
   const [defaultRestSeconds, setDefaultRestSeconds] = useState(String(globalDefaultRestSeconds));
+  const [instructions, setInstructions] = useState('');
 
   useEffect(() => {
     if (!visible) return;
@@ -701,6 +844,7 @@ function ExerciseFormModal({
       exercise?.defaultDistance === undefined ? '' : String(exercise.defaultDistance),
     );
     setDefaultRestSeconds(String(exercise?.defaultRestSeconds ?? globalDefaultRestSeconds));
+    setInstructions(exercise?.instructions ?? '');
   }, [exercise, globalDefaultRestSeconds, visible]);
 
   const submit = () => {
@@ -765,6 +909,7 @@ function ExerciseFormModal({
         : undefined,
       defaultDistance: exerciseTypeUsesDistance(exerciseType) ? distance : undefined,
       defaultRestSeconds: restSeconds,
+      instructions,
     });
 
     if (saved) onClose();
@@ -797,6 +942,18 @@ function ExerciseFormModal({
         onChangeText={setEquipment}
         placeholder="Cable"
       />
+
+      <View style={styles.fieldGroup}>
+        <Text style={styles.fieldLabel}>Instructions or persistent notes (optional)</Text>
+        <TextInput
+          value={instructions}
+          onChangeText={setInstructions}
+          placeholder="Form cues, setup details, or anything you want available every session"
+          placeholderTextColor={colors.textMuted}
+          multiline
+          style={[styles.formInput, styles.instructionsInput]}
+        />
+      </View>
 
       <View style={styles.fieldGroup}>
         <Text style={styles.fieldLabel}>Tracking type</Text>
@@ -912,11 +1069,6 @@ function Detail({ label, value }: { label: string; value: string }) {
   );
 }
 
-function nextOption<T extends string>(options: readonly T[], current: T): T {
-  const currentIndex = options.indexOf(current);
-  return options[(currentIndex + 1) % options.length];
-}
-
 function formatRestTime(totalSeconds: number) {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
@@ -988,6 +1140,51 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
     paddingHorizontal: 14,
     paddingVertical: 9,
+  },
+  filterModalCard: {
+    width: '100%',
+    maxWidth: 480,
+    maxHeight: '82%',
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
+    gap: spacing.md,
+  },
+  filterOptionList: {
+    flexShrink: 1,
+  },
+  filterOption: {
+    minHeight: 52,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+    paddingHorizontal: spacing.sm,
+  },
+  filterOptionActive: {
+    backgroundColor: colors.surfaceElevated,
+  },
+  filterOptionLabel: {
+    flex: 1,
+    color: colors.text,
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  filterOptionLabelActive: {
+    color: colors.primary,
+    fontWeight: '900',
+  },
+  filterOptionCheck: {
+    color: colors.textMuted,
+    fontSize: 20,
+  },
+  filterOptionCheckActive: {
+    color: colors.primary,
+    fontSize: 18,
+    fontWeight: '900',
   },
   filterChipActive: {
     borderColor: colors.primary,
@@ -1115,6 +1312,11 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     paddingHorizontal: spacing.md,
     fontSize: 16,
+  },
+  instructionsInput: {
+    minHeight: 96,
+    paddingTop: spacing.sm,
+    textAlignVertical: 'top',
   },
   detailGrid: {
     flexDirection: 'row',

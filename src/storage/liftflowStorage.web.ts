@@ -31,6 +31,11 @@ export async function saveLiftFlowState(state: LiftFlowStateSnapshot): Promise<v
   storage.setItem(STORAGE_KEY, JSON.stringify(payload));
 }
 
+export async function saveLiftFlowSafetyBackup(state: LiftFlowStateSnapshot): Promise<void> {
+  const payload: PersistedLiftFlowState = { version: STORAGE_VERSION, app: 'LiftFlow', ...state };
+  getStorage().setItem(BACKUP_STORAGE_KEY, JSON.stringify(payload));
+}
+
 export async function clearLiftFlowState(): Promise<void> {
   const storage = getStorage();
   storage.removeItem(STORAGE_KEY);

@@ -8,12 +8,12 @@ import {
   View,
 } from 'react-native';
 
+import { ExerciseProgressChart } from '@/components/ExerciseProgressChart';
 import { SectionCard } from '@/components/SectionCard';
 import type { ExerciseDefinition } from '@/constants/exercises';
 import { colors, radius, spacing } from '@/constants/theme';
 import { useActiveWorkout } from '@/context/ActiveWorkoutContext';
 import {
-  buildExerciseTrend,
   buildMuscleBreakdown,
   buildProgressSummary,
   buildRecentPrs,
@@ -23,18 +23,12 @@ import {
   formatProgressDuration,
   formatProgressVolume,
   getExercisesWithProgress,
-  getExerciseTrendMetricOptions,
-  getTrendChange,
   PROGRESS_RANGE_OPTIONS,
-  type ExerciseTrendMetricKey,
-  type ExerciseTrendPoint,
   type ProgressRangeKey,
 } from '@/lib/progressAnalytics';
 
-const WEEKLY_GOAL = 3;
-
 export default function ProgressScreen() {
-  const { completedWorkouts, exercises } = useActiveWorkout();
+  const { completedWorkouts, exercises, preferences } = useActiveWorkout();
   const [range, setRange] = useState<ProgressRangeKey>('12w');
   const [exercisePickerVisible, setExercisePickerVisible] = useState(false);
 
@@ -47,28 +41,11 @@ export default function ProgressScreen() {
     exercisesWithProgress.find((exercise) => exercise.id === selectedExerciseId) ??
     exercisesWithProgress[0] ??
     null;
-  const metricOptions = useMemo(
-    () =>
-      selectedExercise
-        ? getExerciseTrendMetricOptions(selectedExercise.exerciseType)
-        : [],
-    [selectedExercise],
-  );
-  const [selectedMetric, setSelectedMetric] = useState<ExerciseTrendMetricKey | null>(null);
-  const activeMetric =
-    metricOptions.find((option) => option.key === selectedMetric) ?? metricOptions[0] ?? null;
-
   useEffect(() => {
     if (!selectedExerciseId && exercisesWithProgress[0]) {
       setSelectedExerciseId(exercisesWithProgress[0].id);
     }
   }, [exercisesWithProgress, selectedExerciseId]);
-
-  useEffect(() => {
-    if (metricOptions.length > 0 && !metricOptions.some((option) => option.key === selectedMetric)) {
-      setSelectedMetric(metricOptions[0].key);
-    }
-  }, [metricOptions, selectedMetric]);
 
   const summary = useMemo(
     () => buildProgressSummary(completedWorkouts, exercises, range),
@@ -86,19 +63,6 @@ export default function ProgressScreen() {
     () => buildRecentPrs(exercises, completedWorkouts, range).slice(0, 8),
     [completedWorkouts, exercises, range],
   );
-  const trendPoints = useMemo(
-    () =>
-      selectedExercise && activeMetric
-        ? buildExerciseTrend(
-            selectedExercise,
-            completedWorkouts,
-            activeMetric.key,
-            range,
-          )
-        : [],
-    [activeMetric, completedWorkouts, range, selectedExercise],
-  );
-
   const currentWeek = weeklyProgress[weeklyProgress.length - 1];
   const rangedWorkouts = useMemo(
     () => filterWorkoutsForRange(completedWorkouts, range),
@@ -135,7 +99,7 @@ export default function ProgressScreen() {
               value={formatProgressDuration(summary.trainingSeconds)}
               label="Training time"
             />
-            <ProgressStat value={formatProgressVolume(summary.totalVolume)} label="Volume" />
+            <ProgressStat value={formatProgressVolume(summary.totalVolume)} label={`Volume (${preferences.weightUnit})`} />
             <ProgressStat value={String(summary.prCount)} label="New records" />
             <ProgressStat
               value={
@@ -155,14 +119,14 @@ export default function ProgressScreen() {
               <Text style={styles.muted}>Current week</Text>
             </View>
             <View style={styles.goalBadge}>
-              <Text style={styles.goalText}>Goal: {WEEKLY_GOAL}</Text>
+              <Text style={styles.goalText}>Goal: {preferences.weeklyWorkoutGoal}</Text>
             </View>
           </View>
           <Text style={styles.bodyText}>
-            {(currentWeek?.workoutCount ?? 0) >= WEEKLY_GOAL
+            {(currentWeek?.workoutCount ?? 0) >= preferences.weeklyWorkoutGoal
               ? 'Weekly goal complete. Nice work.'
-              : `${Math.max(0, WEEKLY_GOAL - (currentWeek?.workoutCount ?? 0))} workout${
-                  WEEKLY_GOAL - (currentWeek?.workoutCount ?? 0) === 1 ? '' : 's'
+              : `${Math.max(0, preferences.weeklyWorkoutGoal - (currentWeek?.workoutCount ?? 0))} workout${
+                  preferences.weeklyWorkoutGoal - (currentWeek?.workoutCount ?? 0) === 1 ? '' : 's'
                 } remaining this week.`}
           </Text>
           <BarChart
@@ -233,34 +197,13 @@ export default function ProgressScreen() {
             ) : null
           }
         >
-          {selectedExercise && activeMetric ? (
+          {selectedExercise ? (
             <>
               <Text style={styles.exerciseDetail}>{selectedExercise.detail}</Text>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.metricRow}
-              >
-                {metricOptions.map((option) => (
-                  <RangeChip
-                    key={option.key}
-                    label={option.label}
-                    selected={activeMetric.key === option.key}
-                    onPress={() => setSelectedMetric(option.key)}
-                  />
-                ))}
-              </ScrollView>
-              <TrendSummary
-                points={trendPoints}
-                higherIsBetter={activeMetric.higherIsBetter}
-              />
-              <BarChart
-                items={trendPoints}
-                getValue={(item) => item.value}
-                getLabel={(item) => formatProgressDate(item.completedAt)}
-                formatValue={(_, index) => trendPoints[index]?.displayValue ?? ''}
-                lowerIsBetter={!activeMetric.higherIsBetter}
-                emptyText={`Complete ${selectedExercise.name} in at least one workout to see this trend.`}
+              <ExerciseProgressChart
+                exercise={selectedExercise}
+                completedWorkouts={completedWorkouts}
+                range={range}
               />
             </>
           ) : (
@@ -311,7 +254,6 @@ export default function ProgressScreen() {
         selectedExerciseId={selectedExercise?.id ?? null}
         onSelect={(exercise) => {
           setSelectedExerciseId(exercise.id);
-          setSelectedMetric(null);
           setExercisePickerVisible(false);
         }}
         onClose={() => setExercisePickerVisible(false)}
@@ -416,45 +358,6 @@ function BarChart<T>({
         );
       })}
     </ScrollView>
-  );
-}
-
-function TrendSummary({
-  points,
-  higherIsBetter,
-}: {
-  points: ExerciseTrendPoint[];
-  higherIsBetter: boolean;
-}) {
-  if (points.length === 0) return null;
-  const latest = points[points.length - 1];
-  const best = [...points].sort((a, b) =>
-    higherIsBetter ? b.value - a.value : a.value - b.value,
-  )[0];
-  const change = getTrendChange(points, higherIsBetter);
-
-  return (
-    <View style={styles.trendSummary}>
-      <View style={styles.trendStat}>
-        <Text style={styles.trendLabel}>Latest</Text>
-        <Text style={styles.trendValue}>{latest.displayValue}</Text>
-      </View>
-      <View style={styles.trendStat}>
-        <Text style={styles.trendLabel}>Best</Text>
-        <Text style={styles.trendValue}>{best.displayValue}</Text>
-      </View>
-      <View style={styles.trendStat}>
-        <Text style={styles.trendLabel}>Change</Text>
-        <Text
-          style={[
-            styles.trendValue,
-            change?.improved ? styles.positiveText : styles.neutralText,
-          ]}
-        >
-          {change?.label ?? '—'}
-        </Text>
-      </View>
-    </View>
   );
 }
 

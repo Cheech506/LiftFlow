@@ -7,6 +7,7 @@ type PrimaryButtonProps = {
   onPress: () => void;
   variant?: 'primary' | 'secondary' | 'danger';
   style?: ViewStyle;
+  disabled?: boolean;
 };
 
 export function PrimaryButton({
@@ -14,10 +15,13 @@ export function PrimaryButton({
   onPress,
   variant = 'primary',
   style,
+  disabled = false,
 }: PrimaryButtonProps) {
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityState={{ disabled }}
+      disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => [
         styles.base,
@@ -25,6 +29,7 @@ export function PrimaryButton({
         variant === 'secondary' && styles.secondary,
         variant === 'danger' && styles.danger,
         pressed && styles.pressed,
+        disabled && styles.disabled,
         style,
       ]}
     >
@@ -56,6 +61,9 @@ const styles = StyleSheet.create({
   },
   pressed: {
     opacity: 0.78,
+  },
+  disabled: {
+    opacity: 0.42,
   },
   label: {
     color: colors.background,

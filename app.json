@@ -2,25 +2,33 @@
   "expo": {
     "name": "LiftFlow",
     "slug": "liftflow",
-    "version": "0.1.0",
+    "version": "0.6.0",
     "orientation": "portrait",
     "scheme": "liftflow",
-    "userInterfaceStyle": "automatic",
+    "userInterfaceStyle": "dark",
+    "icon": "./assets/liftflow-icon.png",
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.cheech.liftflow"
     },
     "android": {
       "package": "com.cheech.liftflow",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/liftflow-foreground.png",
+        "backgroundColor": "#0D1210"
+      },
       "predictiveBackGestureEnabled": false
     },
     "web": {
       "bundler": "metro",
-      "output": "static"
+      "output": "static",
+      "favicon": "./assets/liftflow-favicon.png"
     },
     "plugins": [
       "expo-router",
-      "expo-sqlite"
+      "expo-sqlite",
+      "expo-notifications",
+      "expo-font"
     ],
     "experiments": {
       "typedRoutes": true

@@ -9,8 +9,10 @@ import {
   formatDurationShort,
   getCompletedSets,
   getWorkoutDurationSeconds,
+  getWorkoutDateTimestamp,
   isInCurrentWeek,
 } from '@/lib/workoutStats';
+import { buildRecentPrs } from '@/lib/progressAnalytics';
 import { showPrototypeNotice } from '@/lib/prototypeNotice';
 
 export default function HomeScreen() {
@@ -21,6 +23,10 @@ export default function HomeScreen() {
     completedSetCount,
     totalSetCount,
     completedWorkouts,
+    exercises,
+    templates,
+    incompleteWorkouts,
+    preferences,
     persistenceStatus,
   } = useActiveWorkout();
 
@@ -47,6 +53,34 @@ export default function HomeScreen() {
     (total, item) => total + getCompletedSets(item).length,
     0,
   );
+  const workoutDays = new Set(
+    currentWeekWorkouts.map((item) => {
+      const day = new Date(getWorkoutDateTimestamp(item)).getDay();
+      return day === 0 ? 6 : day - 1;
+    }),
+  );
+  const recentPrs = buildRecentPrs(exercises, completedWorkouts, '4w').slice(0, 3);
+  const activeTemplates = templates.filter((template) => !template.archived);
+  const recentlyUsedTemplateIds = completedWorkouts
+    .filter((item) => item.sourceTemplateId)
+    .sort((left, right) => getWorkoutDateTimestamp(right) - getWorkoutDateTimestamp(left))
+    .map((item) => item.sourceTemplateId as string);
+  const recentTemplates = [
+    ...recentlyUsedTemplateIds
+      .map((templateId) => activeTemplates.find((template) => template.id === templateId))
+      .filter((template, index, list) =>
+        Boolean(template) && list.findIndex((candidate) => candidate?.id === template?.id) === index,
+      ),
+    ...activeTemplates,
+  ]
+    .filter((template, index, list) =>
+      Boolean(template) && list.findIndex((candidate) => candidate?.id === template?.id) === index,
+    )
+    .slice(0, 3);
+  const recentCompleted = [...completedWorkouts]
+    .sort((left, right) => getWorkoutDateTimestamp(right) - getWorkoutDateTimestamp(left))
+    .slice(0, 3);
+  const isFirstRun = !workout && templates.length === 0 && completedWorkouts.length === 0 && incompleteWorkouts.length === 0;
 
   return (
     <ScrollView contentContainerStyle={styles.content}>
@@ -99,33 +133,47 @@ export default function HomeScreen() {
         </View>
       </SectionCard>
 
+      {isFirstRun ? (
+        <SectionCard title="Welcome to LiftFlow">
+          <Text style={styles.cardHeading}>Start clean—no fake workouts or analytics.</Text>
+          <Text style={styles.muted}>
+            Begin an empty workout, build a reusable template, or open Settings to import your Strong CSV. LiftFlow supports Weight & Reps, Bodyweight & Reps, Added Weight, Assisted Bodyweight, Reps Only, Duration, and Distance & Duration.
+          </Text>
+          <View style={styles.buttonRow}>
+            <PrimaryButton label="Build Template" onPress={() => router.push('/workouts')} style={styles.flexButton} />
+            <PrimaryButton label="Import Strong" onPress={() => router.push('/settings')} variant="secondary" style={styles.flexButton} />
+          </View>
+        </SectionCard>
+      ) : null}
+
       <SectionCard title="Recent workouts">
-        <View style={styles.templateCard}>
-          <View>
-            <Text style={styles.cardHeading}>Upper A</Text>
-            <Text style={styles.muted}>Upper / Lower · 2 exercises</Text>
+        {recentTemplates.length > 0 ? recentTemplates.map((template, index) => template ? (
+          <View key={template.id}>
+            {index > 0 ? <View style={styles.divider} /> : null}
+            <View style={styles.templateCard}>
+              <View style={styles.flexCopy}>
+                <Text style={styles.cardHeading}>{template.name}</Text>
+                <Text style={styles.muted}>{template.folder} · {template.detail}</Text>
+              </View>
+              <PrimaryButton
+                label="Start"
+                onPress={() => beginWorkout(template.name, template.id)}
+                style={styles.smallButton}
+              />
+            </View>
           </View>
-          <PrimaryButton
-            label="Start"
-            onPress={() => beginWorkout('Upper A', 'upper-a')}
-            style={styles.smallButton}
-          />
-        </View>
-        <View style={styles.divider} />
-        <View style={styles.templateCard}>
+        ) : null) : (
           <View>
-            <Text style={styles.cardHeading}>Lower A</Text>
-            <Text style={styles.muted}>Upper / Lower · 1 exercise</Text>
+            <Text style={styles.emptyTitle}>No templates yet</Text>
+            <Text style={styles.muted}>Create a workout template to keep your routine one tap away.</Text>
           </View>
-          <PrimaryButton
-            label="Start"
-            onPress={() => beginWorkout('Lower A', 'lower-a')}
-            style={styles.smallButton}
-          />
-        </View>
+        )}
       </SectionCard>
 
-      <SectionCard title="This week">
+      <SectionCard
+        title="This week"
+        headerRight={<Text style={styles.weekGoal}>{currentWeekWorkouts.length}/{preferences.weeklyWorkoutGoal} goal</Text>}
+      >
         <View style={styles.statsRow}>
           <Stat value={String(currentWeekWorkouts.length)} label="Workouts" />
           <Stat value={formatDurationShort(currentWeekSeconds)} label="Training" />
@@ -135,17 +183,49 @@ export default function HomeScreen() {
           {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((day, index) => (
             <View key={`${day}-${index}`} style={styles.day}>
               <Text style={styles.dayLabel}>{day}</Text>
-              <View style={styles.dayDot} />
+              <View style={[styles.dayDot, workoutDays.has(index) && styles.dayDotActive]} />
             </View>
           ))}
         </View>
       </SectionCard>
 
       <SectionCard title="Recent personal records">
-        <Text style={styles.emptyTitle}>No records yet</Text>
-        <Text style={styles.muted}>
-          Complete qualifying working sets and your newest PRs will appear here.
-        </Text>
+        {recentPrs.length > 0 ? recentPrs.map((record, index) => (
+          <View key={`${record.exerciseId}-${record.key}-${record.workoutId}-${index}`}>
+            {index > 0 ? <View style={styles.divider} /> : null}
+            <View style={styles.rowBetween}>
+              <View style={styles.flexCopy}>
+                <Text style={styles.cardHeading}>{record.exerciseName}</Text>
+                <Text style={styles.muted}>{record.label} · {record.workoutName}</Text>
+              </View>
+              <Text style={styles.prValue}>{record.displayValue}</Text>
+            </View>
+          </View>
+        )) : (
+          <>
+            <Text style={styles.emptyTitle}>No records yet</Text>
+            <Text style={styles.muted}>
+              Complete qualifying working sets and your newest PRs will appear here.
+            </Text>
+          </>
+        )}
+      </SectionCard>
+
+      <SectionCard title="Recent activity">
+        {recentCompleted.length > 0 ? recentCompleted.map((completed, index) => (
+          <View key={completed.id}>
+            {index > 0 ? <View style={styles.divider} /> : null}
+            <View style={styles.templateCard}>
+              <View style={styles.flexCopy}>
+                <Text style={styles.cardHeading}>{completed.name}</Text>
+                <Text style={styles.muted}>{formatRecentDate(getWorkoutDateTimestamp(completed))} · {getCompletedSets(completed).length} completed sets</Text>
+              </View>
+              <PrimaryButton label="View" onPress={() => router.push('/history')} variant="secondary" style={styles.smallButton} />
+            </View>
+          </View>
+        )) : (
+          <Text style={styles.muted}>Finished workouts will appear here with one-tap access to History.</Text>
+        )}
       </SectionCard>
     </ScrollView>
   );
@@ -175,6 +255,10 @@ function formatToday() {
   })
     .format(new Date())
     .toUpperCase();
+}
+
+function formatRecentDate(timestamp: number) {
+  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(timestamp));
 }
 
 const styles = StyleSheet.create({
@@ -291,6 +375,23 @@ const styles = StyleSheet.create({
     height: 8,
     borderRadius: 4,
     backgroundColor: colors.border,
+  },
+  dayDotActive: {
+    backgroundColor: colors.primary,
+  },
+  flexCopy: {
+    flex: 1,
+  },
+  prValue: {
+    color: colors.primary,
+    fontSize: 15,
+    fontWeight: '900',
+    marginLeft: spacing.sm,
+  },
+  weekGoal: {
+    color: colors.primary,
+    fontSize: 12,
+    fontWeight: '900',
   },
   emptyTitle: {
     color: colors.text,

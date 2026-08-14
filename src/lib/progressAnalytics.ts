@@ -7,11 +7,14 @@ import {
   buildExercisePrTimeline,
   exerciseMatchesDefinition,
   findExerciseDefinition,
+  hasQualifyingProgressMetrics,
   type ExercisePrAchievement,
 } from '@/lib/exerciseProgress';
 import {
+  estimateOneRepMax,
   formatDurationShort,
   getMondayStart,
+  getWorkoutDateTimestamp,
   getWorkoutDurationSeconds,
   getWorkoutVolume,
 } from '@/lib/workoutStats';
@@ -99,8 +102,8 @@ export function filterWorkoutsForRange(
 ): CompletedWorkout[] {
   const cutoff = getProgressRangeCutoff(range, now);
   return [...workouts]
-    .filter((workout) => cutoff === null || workout.completedAt >= cutoff)
-    .sort((a, b) => a.completedAt - b.completedAt);
+    .filter((workout) => cutoff === null || getWorkoutDateTimestamp(workout) >= cutoff)
+    .sort((a, b) => getWorkoutDateTimestamp(a) - getWorkoutDateTimestamp(b));
 }
 
 export function buildProgressSummary(
@@ -138,7 +141,7 @@ export function buildWeeklyProgress(
   const rangedWorkouts = filterWorkoutsForRange(workouts, range, now);
   const configuredWeeks = PROGRESS_RANGE_OPTIONS.find((item) => item.key === range)?.weeks;
   const firstWorkoutWeek = rangedWorkouts.length
-    ? getMondayStart(rangedWorkouts[0].completedAt)
+    ? getMondayStart(getWorkoutDateTimestamp(rangedWorkouts[0]))
     : getMondayStart(now);
   const currentWeek = getMondayStart(now);
   const weeks = configuredWeeks ?? Math.max(1, Math.round((currentWeek - firstWorkoutWeek) / WEEK_MS) + 1);
@@ -159,7 +162,7 @@ export function buildWeeklyProgress(
 
   const bucketByWeek = new Map(buckets.map((bucket) => [bucket.weekStart, bucket]));
   rangedWorkouts.forEach((workout) => {
-    const bucket = bucketByWeek.get(getMondayStart(workout.completedAt));
+    const bucket = bucketByWeek.get(getMondayStart(getWorkoutDateTimestamp(workout)));
     if (!bucket) return;
     bucket.workoutCount += 1;
     bucket.workingSetCount += getWorkingSets(workout).length;
@@ -228,7 +231,9 @@ export function getExercisesWithProgress(
         workout.exercises.some(
           (workoutExercise) =>
             exerciseMatchesDefinition(exercise, workoutExercise) &&
-            workoutExercise.sets.some(isWorkingSet),
+            workoutExercise.sets.some(
+              (set) => isWorkingSet(set) && hasQualifyingProgressMetrics(exercise.exerciseType, set),
+            ),
         ),
       ),
     )
@@ -287,12 +292,11 @@ export function buildExerciseTrend(
       return [{
         workoutId: workout.id,
         workoutName: workout.name,
-        completedAt: workout.completedAt,
+        completedAt: getWorkoutDateTimestamp(workout),
         value,
         displayValue: formatTrendValue(metric, value),
       } satisfies ExerciseTrendPoint];
-    })
-    .slice(-16);
+    });
 }
 
 export function formatProgressVolume(volume: number): string {
@@ -366,23 +370,28 @@ function getSetMetric(
 
   switch (metric) {
     case 'estimatedOneRepMax':
-      return supportsWeightAndReps(exerciseType) && weight !== null && reps !== null && weight > 0 && reps > 0
-        ? weight * (1 + reps / 30)
-        : null;
+      if (
+        !supportsWeightAndReps(exerciseType) ||
+        weight === null ||
+        weight <= 0 ||
+        reps === null ||
+        reps <= 0
+      ) return null;
+      return estimateOneRepMax(weight, reps) ?? null;
     case 'weight':
-      return supportsWeightAndReps(exerciseType) ? weight : null;
+      return supportsWeightAndReps(exerciseType) && reps !== null && reps > 0 ? weight : null;
     case 'reps':
-      return reps;
+      return reps !== null && reps > 0 ? reps : null;
     case 'sessionVolume':
-      return supportsWeightAndReps(exerciseType) && weight !== null && reps !== null
+      return supportsWeightAndReps(exerciseType) && weight !== null && weight > 0 && reps !== null && reps > 0
         ? weight * reps
         : null;
     case 'assistance':
-      return exerciseType === 'Assisted Bodyweight' ? weight : null;
+      return exerciseType === 'Assisted Bodyweight' && reps !== null && reps > 0 ? weight : null;
     case 'duration':
-      return duration;
+      return duration !== null && duration > 0 ? duration : null;
     case 'distance':
-      return distance;
+      return distance !== null && distance > 0 ? distance : null;
     case 'pace':
       return exerciseType === 'Distance & Duration' && distance !== null && distance > 0 && duration !== null
         ? duration / distance
