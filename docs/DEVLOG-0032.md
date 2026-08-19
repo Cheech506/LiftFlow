@@ -34,7 +34,7 @@ Close the remaining gaps in the complete local workout and mobile-app systems be
 - Upgraded the portable state format to version 12.
 - Older states receive safe defaults for the new preferences.
 - Unfiled templates, archived folders, and exercise instructions survive JSON and normalized SQLite round trips.
-- The supplied real backup passed a v12 round trip with 75 exercises, 2 folders, 5 templates, 379 completed workouts, 1,955 workout exercises, and 8,261 sets preserved.
+- The supplied real backup passed a v12 round trip with 75 exercises, 2 folders, 5 templates, 379 completed workouts, 1,927 workout exercises, and 8,173 sets preserved.
 
 ## Automated validation
 

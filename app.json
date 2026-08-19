@@ -2,17 +2,19 @@
   "expo": {
     "name": "LiftFlow",
     "slug": "liftflow",
-    "version": "0.6.0",
+    "version": "0.7.0",
     "orientation": "portrait",
     "scheme": "liftflow",
     "userInterfaceStyle": "dark",
     "icon": "./assets/liftflow-icon.png",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.cheech.liftflow"
+      "bundleIdentifier": "com.cheech.liftflow",
+      "buildNumber": "1"
     },
     "android": {
       "package": "com.cheech.liftflow",
+      "versionCode": 1,
       "adaptiveIcon": {
         "foregroundImage": "./assets/liftflow-foreground.png",
         "backgroundColor": "#0D1210"

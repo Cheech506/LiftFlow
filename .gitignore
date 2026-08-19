@@ -2,6 +2,13 @@ node_modules/
 .expo/
 dist/
 dist-audit/
+ios/
+android/
+credentials.json
+*.mobileprovision
+*.p12
+*.cer
+.env*.local
 *.log
 .DS_Store
 

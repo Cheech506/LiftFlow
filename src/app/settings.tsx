@@ -1,5 +1,6 @@
-import { Alert, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { Alert, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { useState } from 'react';
+import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { useRouter } from 'expo-router';
 
 import { SectionCard } from '@/components/SectionCard';
@@ -41,6 +42,24 @@ export default function SettingsScreen() {
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const lastStrongImport = getLastStrongImportFromWorkouts(completedWorkouts);
   const importedStrongWorkoutCount = countImportedStrongWorkouts(completedWorkouts);
+  const appVersion = Constants.expoConfig?.version ?? '0.7.0';
+  const nativeBuildNumber = Constants.platform?.ios?.buildNumber
+    ?? Constants.platform?.android?.versionCode
+    ?? null;
+  const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
+  const buildEnvironment = Platform.OS === 'web'
+    ? 'Web development build'
+    : isExpoGo
+      ? 'Expo Go compatibility session'
+      : Constants.executionEnvironment === ExecutionEnvironment.Standalone
+        ? 'Installed release build'
+        : 'Installed development build';
+  const isFreshInstalledApp = Platform.OS !== 'web'
+    && !isExpoGo
+    && exercises.filter((item) => item.isCustom).length === 0
+    && templates.length === 0
+    && incompleteWorkouts.length === 0
+    && completedWorkouts.length === 0;
 
   const runAction = async (label: string, action: () => Promise<void>) => {
     if (busyAction) return;
@@ -197,8 +216,27 @@ export default function SettingsScreen() {
 
   return (
     <ScrollView contentContainerStyle={styles.content}>
-      <SectionCard title="Stable local release">
-        <SettingsRow label="LiftFlow v0.6.0" detail="Complete local workout, exercise, history, progress, and data-management system" />
+      <SectionCard title="LiftFlow build">
+        <SettingsRow
+          label={`LiftFlow v${appVersion}`}
+          detail={`${buildEnvironment}${nativeBuildNumber === null ? '' : ` · native build ${nativeBuildNumber}`}`}
+        />
+        {isExpoGo ? (
+          <SettingsRow
+            label={busyAction === 'Backup export' ? 'Preparing migration backup…' : 'Export before leaving Expo Go'}
+            detail="The installed LiftFlow app uses separate storage, so save this JSON backup before moving."
+            onPress={exportBackup}
+            disabled={Boolean(busyAction)}
+          />
+        ) : null}
+        {isFreshInstalledApp ? (
+          <SettingsRow
+            label={busyAction === 'Backup restore' ? 'Opening migration backup…' : 'Restore your Expo Go backup'}
+            detail="Bring exercises, templates, Strong history, PRs, preferences, and incomplete workouts into this installed app."
+            onPress={restoreBackup}
+            disabled={Boolean(busyAction)}
+          />
+        ) : null}
       </SectionCard>
 
       <SectionCard title="Local data">
@@ -335,7 +373,7 @@ export default function SettingsScreen() {
       <SectionCard title="About LiftFlow">
         <SettingsRow label="Local-first by design" detail="Your workout data stays on this device unless you export or share it." />
         <SettingsRow label="Active workout protection" detail="Only one workout can run at a time, and the Resume bar keeps it visible." />
-        <SettingsRow label="Self-hosted sync" detail="Reserved for the later FastAPI, PostgreSQL, and Docker release." />
+        <SettingsRow label="Self-hosted sync" detail="The next phase connects this installed app to the private Docker and PostgreSQL server." />
       </SectionCard>
     </ScrollView>
   );
