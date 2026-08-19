@@ -16,6 +16,8 @@
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test tests/*.test.ts",
     "check": "npm run typecheck && npm test",
+    "server:test": "docker compose --profile test run --rm --build api-test",
+    "server:verify": "bash scripts/verify-server.sh",
     "audit:strong": "node --import tsx scripts/audit-strong-import.ts"
   },
   "dependencies": {

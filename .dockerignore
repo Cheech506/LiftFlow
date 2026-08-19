@@ -1,0 +1,17 @@
+.git
+.expo
+.env
+android
+dist
+dist-audit
+ios
+node_modules
+server/.coverage
+server/.pytest_cache
+server/.venv
+server/**/__pycache__
+server/**/*.pyc
+*.log
+*.mobileprovision
+*.p12
+*.cer

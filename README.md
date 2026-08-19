@@ -31,8 +31,9 @@ LiftFlow is a local-first workout tracker for iPhone, Android, and the web. It i
 - A project-owned Expo development client for locally installed iPhone and Android builds.
 - Permanent native application identifiers, development/preview/production build profiles, and separate native build numbers.
 - An in-app migration prompt that distinguishes Expo Go from the installed LiftFlow app and restores the portable JSON backup into the new app sandbox.
+- A Docker Compose server foundation with FastAPI, PostgreSQL, Alembic migrations, stable server identity, and versioned health/server-information endpoints.
 
-All workout data is stored locally and remains usable offline. On iPhone and Android, LiftFlow uses normalized SQLite tables. The browser fallback remains local until the shared server-backed web application is built. The private Docker/PostgreSQL server and synchronization layer begin after this release.
+All workout data remains local and usable offline. On iPhone and Android, LiftFlow uses normalized SQLite tables. LF-034 adds the private server foundation without changing mobile storage; authentication, migration, synchronization, and the server-backed web application remain later isolated batches.
 
 ## Install dependencies
 
@@ -44,6 +45,45 @@ npm ci
 ```
 
 The committed lockfile pins the Expo SDK 54-compatible development client and its native support packages. Run the quality checks before generating native projects.
+
+## LF-034 self-hosted server foundation
+
+Requirements: Docker Desktop, OrbStack, or another Docker Compose-compatible runtime.
+
+```bash
+cp .env.example .env
+docker compose up --build -d --wait
+curl http://localhost:8080/api/v1/health/live
+curl http://localhost:8080/api/v1/health
+curl http://localhost:8080/api/v1/server-info
+```
+
+Open `http://localhost:8080/docs` for the generated API documentation. The first start creates the PostgreSQL volume, waits for the database, applies Alembic migrations, and creates one stable server identity. It does not import or synchronize workout data yet.
+
+LF-034 binds the unauthenticated API to `127.0.0.1` by default, so another computer or phone cannot reach it. Keep that loopback binding until LF-035 authentication is complete.
+
+Run the backend tests in the same pinned container environment:
+
+```bash
+npm run server:test
+```
+
+Run the complete startup, migration, endpoint, and backend-test verification:
+
+```bash
+npm run server:verify
+```
+
+Useful operational commands:
+
+```bash
+docker compose ps
+docker compose logs -f api
+docker compose logs -f postgres
+docker compose down
+```
+
+`docker compose down` keeps the PostgreSQL volume. Do not add `--volumes` unless the database is intentionally being destroyed. Replace the example password before exposing LiftFlow beyond the development Mac.
 
 ## First iPhone development build
 
@@ -114,5 +154,9 @@ The automated suite covers development-build configuration, previous-performance
 - `src/context` — local application state and workout actions.
 - `src/lib` — tracking, history, analytics, import, export, timers, and previous-performance logic.
 - `src/storage` — versioned local persistence and backup validation.
+- `server/app` — versioned FastAPI application and database access.
+- `server/migrations` — Alembic-managed PostgreSQL schema history.
+- `server/tests` — backend endpoint, configuration, and failure-mode tests.
+- `compose.yaml` — local self-hosted API and PostgreSQL stack.
 - `tests` — regression tests.
 - `docs` — chronological development logs and manual release checklists.
