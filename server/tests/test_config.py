@@ -36,3 +36,16 @@ def test_production_accepts_a_unique_password() -> None:
     )
 
     assert settings.environment == "production"
+
+
+def test_cors_origins_are_explicit_and_normalized() -> None:
+    settings = Settings(
+        _env_file=None,
+        postgres_password="test-password",
+        cors_origins="http://localhost:8081, https://liftflow.example.com ",
+    )
+
+    assert settings.allowed_origins == [
+        "http://localhost:8081",
+        "https://liftflow.example.com",
+    ]

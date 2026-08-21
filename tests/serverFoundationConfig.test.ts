@@ -33,7 +33,7 @@ test('declares the versioned health and server-information API contract', () => 
   assert.match(health, /@router\.get\("\/health"/);
   assert.match(health, /@router\.get\("\/health\/live"/);
   assert.match(serverInfo, /@router\.get\("\/server-info"/);
-  assert.match(serverInfo, /authentication=False/);
+  assert.match(serverInfo, /authentication=True/);
   assert.match(serverInfo, /sync=False/);
 });
 

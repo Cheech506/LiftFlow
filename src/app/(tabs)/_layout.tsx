@@ -1,15 +1,17 @@
 import { Tabs, useRouter } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ActiveWorkoutBar } from '@/components/ActiveWorkoutBar';
 import { TabIcon } from '@/components/TabIcon';
 import { colors, spacing } from '@/constants/theme';
+import { getTabBarLayout, webTabLabelLayout } from '@/lib/tabBarLayout';
 
 export default function TabsLayout() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const tabBarLayout = getTabBarLayout(Platform.OS === 'web' ? 'web' : 'native', insets.bottom);
 
   return (
     <View style={styles.container}>
@@ -20,16 +22,20 @@ export default function TabsLayout() {
           headerTitleStyle: styles.headerTitle,
           headerShadowVisible: false,
           sceneStyle: styles.scene,
-          tabBarStyle: [
-            styles.tabBar,
-            {
-              height: 56 + insets.bottom,
-              paddingBottom: Math.max(insets.bottom, 7),
-            },
-          ],
+          tabBarStyle: [styles.tabBar, tabBarLayout],
           tabBarActiveTintColor: colors.primary,
           tabBarInactiveTintColor: colors.textMuted,
-          tabBarLabelStyle: styles.tabLabel,
+          tabBarAllowFontScaling: false,
+          tabBarLabelPosition: 'below-icon',
+          tabBarLabel:
+            Platform.OS === 'web'
+              ? ({ children, color }) => (
+                  <Text numberOfLines={1} style={[styles.tabLabel, webTabLabelLayout, { color }]}>
+                    {children}
+                  </Text>
+                )
+              : undefined,
+          tabBarLabelStyle: Platform.OS === 'web' ? undefined : styles.tabLabel,
           headerRight: () => (
             <Pressable
               accessibilityRole="button"

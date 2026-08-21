@@ -19,7 +19,7 @@ class Settings(BaseSettings):
 
     app_name: str = "LiftFlow Server"
     environment: Literal["development", "test", "production"] = "development"
-    server_version: str = "0.1.0"
+    server_version: str = "0.2.0"
     api_version: str = "v1"
     api_prefix: str = "/api/v1"
     minimum_client_version: str = "0.7.0"
@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     postgres_password: SecretStr = SecretStr(DEVELOPMENT_PASSWORD)
     database_pool_size: int = 5
     database_max_overflow: int = 10
+    access_token_minutes: int = 30
+    refresh_token_days: int = 30
+    cors_origins: str = "http://localhost:8081,http://127.0.0.1:8081"
 
     @model_validator(mode="after")
     def reject_development_secret_in_production(self) -> "Settings":
@@ -52,6 +55,10 @@ class Settings(BaseSettings):
             port=self.postgres_port,
             database=self.postgres_db,
         )
+
+    @property
+    def allowed_origins(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
 
 @lru_cache

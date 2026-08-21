@@ -14,8 +14,10 @@ printf '\nChecking PostgreSQL-backed readiness\n'
 curl --fail --silent --show-error "$server_url/api/v1/health"
 printf '\nChecking stable server identity\n'
 curl --fail --silent --show-error "$server_url/api/v1/server-info"
+printf '\nChecking single-owner authentication status\n'
+curl --fail --silent --show-error "$server_url/api/v1/auth/status"
 printf '\nChecking the active Alembic revision\n'
-docker compose exec -T api alembic current
+docker compose exec -T api alembic current | grep '0002_single_owner_auth (head)'
 printf 'Running backend tests in the pinned container\n'
 docker compose --profile test run --rm --build api-test
-printf 'LF-034 server verification passed.\n'
+printf 'LF-035 server verification passed.\n'

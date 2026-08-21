@@ -1,6 +1,6 @@
 # Start Here
 
-LiftFlow now contains two independently testable pieces: the installed Expo development client and the LF-034 self-hosted server foundation.
+LiftFlow now contains an installed Expo development client and the authenticated LF-035 self-hosted server. Each Docker installation supports exactly one owner.
 
 ## Mobile app
 
@@ -9,10 +9,11 @@ cd LiftFlow
 nvm use
 npm ci
 npm run check
-npm start
+npm run prebuild:clean -- --platform ios
+npm run ios
 ```
 
-Use the installed LiftFlow development client or an iOS/Android simulator. Expo Go remains useful only for exporting the final migration backup; the installed app owns a separate data sandbox.
+LF-035 adds encrypted native credential storage, so the development client needs one native rebuild. Use the installed LiftFlow app or an iOS/Android simulator; do not switch Metro to Expo Go.
 
 ## Self-hosted server
 
@@ -23,12 +24,15 @@ cd LiftFlow
 cp .env.example .env
 docker compose up --build -d --wait
 curl http://localhost:8080/api/v1/health
+curl http://localhost:8080/api/v1/auth/status
 ```
 
-The API documentation is at `http://localhost:8080/docs`. LF-034 proves the API, database, migration, and server identity foundation. It intentionally does not expose authentication or workout synchronization yet.
+The API documentation is at `http://localhost:8080/docs`. In the simulator, enter `http://127.0.0.1:8080`, then create the server's one owner account or sign in if setup is already complete.
+
+Authentication does not migrate workouts. The simulator's local SQLite data stays unchanged and usable offline until the separate guarded migration batch.
 
 ## Before continuing
 
 - Follow `docs/V0.7-DEV-BUILD-CHECKLIST.md` for the installed mobile app.
-- Follow `docs/LF034-SERVER-FOUNDATION-CHECKLIST.md` for Docker and API testing.
+- Follow `docs/LF035-SINGLE-OWNER-CHECKLIST.md` for Docker, owner setup, and simulator testing.
 - Never commit `.env`, Apple signing credentials, generated `ios`/`android` projects, or database contents.

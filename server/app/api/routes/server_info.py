@@ -23,7 +23,7 @@ async def server_info(
         storage_version=settings.mobile_storage_version,
         environment=settings.environment,
         capabilities=ServerCapabilities(
-            authentication=False,
+            authentication=True,
             backup_import=False,
             sync=False,
             web_app=False,

@@ -22,7 +22,7 @@ LiftFlow is a local-first workout tracker for iPhone, Android, and the web. It i
 - Manual entry for past workouts with type-aware fields and effort values.
 - Multiple incomplete workouts that can be saved, resumed later, or deliberately deleted.
 - Progress summaries, weekly activity and volume, muscle-group distribution, and complete per-exercise trends.
-- All-time exercise pages with metric/date-range charts, verified records, expandable PR timelines, and complete workout history.
+- All-time exercise pages with metric/date-range charts, verified records, Strong-style 1–12 rep max tables, expandable PR timelines, and complete workout history.
 - Strong CSV preview/import with exercise matching, deduplication, safety backup, suspicious-duration handling, calculated PR rebuilding, and full-batch rollback.
 - CSV export and complete JSON backup/restore.
 - Persistent custom-exercise instructions plus weight, distance, and effort preferences.
@@ -32,8 +32,10 @@ LiftFlow is a local-first workout tracker for iPhone, Android, and the web. It i
 - Permanent native application identifiers, development/preview/production build profiles, and separate native build numbers.
 - An in-app migration prompt that distinguishes Expo Go from the installed LiftFlow app and restores the portable JSON backup into the new app sandbox.
 - A Docker Compose server foundation with FastAPI, PostgreSQL, Alembic migrations, stable server identity, and versioned health/server-information endpoints.
+- An Immich-style server connection screen with exactly one owner account per Docker installation.
+- Argon2id password hashing, hashed rotating device tokens, protected owner endpoints, and encrypted native credential storage.
 
-All workout data remains local and usable offline. On iPhone and Android, LiftFlow uses normalized SQLite tables. LF-034 adds the private server foundation without changing mobile storage; authentication, migration, synchronization, and the server-backed web application remain later isolated batches.
+All workout data remains local and usable offline. On iPhone and Android, LiftFlow uses normalized SQLite tables. LF-035 authenticates the installed app without uploading or changing workout data; guarded migration, synchronization, and the server-backed web application remain later isolated batches.
 
 ## Install dependencies
 
@@ -46,7 +48,7 @@ npm ci
 
 The committed lockfile pins the Expo SDK 54-compatible development client and its native support packages. Run the quality checks before generating native projects.
 
-## LF-034 self-hosted server foundation
+## LF-035 single-owner self-hosted server
 
 Requirements: Docker Desktop, OrbStack, or another Docker Compose-compatible runtime.
 
@@ -56,11 +58,23 @@ docker compose up --build -d --wait
 curl http://localhost:8080/api/v1/health/live
 curl http://localhost:8080/api/v1/health
 curl http://localhost:8080/api/v1/server-info
+curl http://localhost:8080/api/v1/auth/status
 ```
 
-Open `http://localhost:8080/docs` for the generated API documentation. The first start creates the PostgreSQL volume, waits for the database, applies Alembic migrations, and creates one stable server identity. It does not import or synchronize workout data yet.
+Open `http://localhost:8080/docs` for the generated API documentation. The first start creates the PostgreSQL volume, applies Alembic migrations, creates one stable server identity, and waits for the owner to finish setup from LiftFlow. The database enforces exactly one owner account.
 
-LF-034 binds the unauthenticated API to `127.0.0.1` by default, so another computer or phone cannot reach it. Keep that loopback binding until LF-035 authentication is complete.
+The API remains bound to `127.0.0.1` by default. That works with the iOS simulator on the same Mac. For a physical phone on a trusted LAN, set `LIFTFLOW_API_HOST=0.0.0.0`, restart Compose, and connect using the Docker computer's LAN address. HTTP is for trusted development networks only; production exposure waits for LF-040 HTTPS.
+
+LF-035 authentication provides:
+
+- `GET /api/v1/auth/status` — first-owner setup state.
+- `POST /api/v1/auth/setup` — one-time owner creation.
+- `POST /api/v1/auth/login` — device-aware owner login.
+- `POST /api/v1/auth/refresh` — rotating access and refresh tokens.
+- `GET /api/v1/auth/me` — authenticated owner identity.
+- `POST /api/v1/auth/logout` — revoke the current device session.
+
+Passwords are stored only as Argon2id hashes. Usable access and refresh tokens are returned once to the app; PostgreSQL stores only SHA-256 token digests. Native credentials use Expo SecureStore, backed by the iOS Keychain or Android Keystore.
 
 Run the backend tests in the same pinned container environment:
 
@@ -97,7 +111,14 @@ open ios/LiftFlow.xcworkspace
 
 In Xcode, select the LiftFlow target, open **Signing & Capabilities**, enable automatic signing, and choose your Apple development team. Connect and trust the iPhone, choose it as the run destination, and press Run. A free Personal Team works for local testing but expires after seven days; a paid Apple Developer team removes that Personal Team limitation and supports EAS/internal distribution.
 
-After LiftFlow installs, open its Settings page and choose **Restore your Expo Go backup**. Do not delete Expo Go until the restored exercise, template, workout, History, and Progress totals have been verified.
+After LiftFlow installs, enter `http://127.0.0.1:8080` in the simulator, create or sign in to the one server owner, and verify the local exercise, template, workout, History, and Progress totals are unchanged.
+
+LF-035 adds the native `expo-secure-store` module. Rebuild the development client once after applying this batch:
+
+```bash
+npm run prebuild:clean -- --platform ios
+npm run ios
+```
 
 ## Daily development after installation
 
@@ -146,7 +167,7 @@ npx expo-doctor
 npx expo export --platform web
 ```
 
-The automated suite covers development-build configuration, previous-performance matching, legacy migration, normalized projection round trips, incomplete workout recovery, supersets, Recently Deleted retention, combined History filters, Strong import, complete trend history, invalid-PR exclusion, recalculation, duplicate prevention, and rollback. See [docs/V0.7-DEV-BUILD-CHECKLIST.md](docs/V0.7-DEV-BUILD-CHECKLIST.md) for the Expo Go migration and native phone checks.
+The automated suite additionally covers the single-owner database constraint, password/token hashing, protected routes, server-address normalization, compatibility checks, and encrypted native session configuration. See [docs/LF035-SINGLE-OWNER-CHECKLIST.md](docs/LF035-SINGLE-OWNER-CHECKLIST.md) for the complete Docker and simulator acceptance test.
 
 ## Project structure
 

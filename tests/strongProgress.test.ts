@@ -44,6 +44,9 @@ test('Strong history rebuilds all-time exercise records without zero-rep fake PR
   const bench = imported.exercises[0];
   const progress = buildExerciseProgress(bench, imported.completedWorkouts);
   const weightRecord = progress.records.find((record) => record.key === 'weight');
+  const oneRepMax = progress.repMaxRecords.find((record) => record.repCount === 1);
+  const fiveRepMax = progress.repMaxRecords.find((record) => record.repCount === 5);
+  const twoRepMax = progress.repMaxRecords.find((record) => record.repCount === 2);
   const allTimeTrend = buildExerciseTrend(
     bench,
     imported.completedWorkouts,
@@ -54,8 +57,43 @@ test('Strong history rebuilds all-time exercise records without zero-rep fake PR
   assert.equal(progress.totalSessions, 4);
   assert.equal(weightRecord?.value, 245);
   assert.equal(weightRecord?.workoutName, 'Upper C');
+  assert.equal(progress.repMaxRecords.length, 12);
+  assert.equal(oneRepMax?.weight, 245);
+  assert.equal(oneRepMax?.workoutName, 'Upper C');
+  assert.equal(fiveRepMax?.weight, 225);
+  assert.equal(fiveRepMax?.workoutName, 'Upper D');
+  assert.equal(twoRepMax?.weight, 225);
+  assert.equal(twoRepMax?.workoutName, 'Upper D');
   assert.deepEqual(allTimeTrend.map((point) => point.value), [185, 245, 225]);
   assert.ok(progress.recentPrs.every((record) => record.displayValue !== '295 lb'));
+});
+
+test('higher-rep sets raise every supported lower-rep record without using warmups or failed attempts', () => {
+  const exactRepCsv = `${header}
+2024-01-01 10:00:00,Session 1,1h,Bench Press,W,300,3,,,,,
+2024-01-01 10:00:00,Session 1,1h,Bench Press,1,200,3,,,,,8
+2024-02-01 10:00:00,Session 2,1h,Bench Press,1,215,3,,,,,9
+2024-03-01 10:00:00,Session 3,1h,Bench Press,1,225,5,,,,,9
+2024-04-01 10:00:00,Session 4,1h,Bench Press,1,315,0,,,,,10
+2024-05-01 10:00:00,Session 5,1h,Bench Press,1,205,13,,,,,9`;
+  const imported = prepareStrongImport(exactRepCsv, snapshot).nextState;
+  const progress = buildExerciseProgress(imported.exercises[0], imported.completedWorkouts);
+
+  assert.deepEqual(
+    progress.repMaxRecords.map((record) => record.repCount),
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+  );
+  assert.equal(progress.repMaxRecords[0].weight, 225);
+  assert.equal(progress.repMaxRecords[1].weight, 225);
+  assert.equal(progress.repMaxRecords[2].weight, 225);
+  assert.equal(progress.repMaxRecords[2].workoutName, 'Session 3');
+  assert.equal(progress.repMaxRecords[3].weight, 225);
+  assert.equal(progress.repMaxRecords[4].weight, 225);
+  assert.equal(progress.repMaxRecords[5].weight, 205);
+  assert.equal(progress.repMaxRecords[11].weight, 205);
+  assert.equal(progress.repMaxRecords[11].workoutName, 'Session 5');
+  assert.ok(progress.repMaxRecords.every((record) => record.weight !== 300));
+  assert.ok(progress.repMaxRecords.every((record) => record.weight !== 315));
 });
 
 test('ALL exercise trend keeps complete imported history instead of only 16 sessions', () => {

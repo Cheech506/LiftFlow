@@ -685,6 +685,50 @@ function ExerciseDetailModal({
                     </View>
                   )}
 
+                  {progress && progress.repMaxRecords.some((record) => record.weight !== null) ? (
+                    <View style={styles.performanceList}>
+                      <Text style={styles.performanceSubheading}>Rep max records (1–12)</Text>
+                      <Text style={styles.repMaxDescription}>
+                        Highest actual {exercise.exerciseType === 'Bodyweight + Added Weight' ? 'added ' : ''}weight completed for at least each rep count. A heavier 5-rep set also raises rows 1–4. Warm-up sets are excluded.
+                      </Text>
+                      <View style={styles.repMaxTable}>
+                        <View style={[styles.repMaxRow, styles.repMaxHeaderRow]}>
+                          <Text style={[styles.repMaxHeader, styles.repMaxRepsColumn]}>REPS</Text>
+                          <Text style={[styles.repMaxHeader, styles.repMaxWeightColumn]}>BEST</Text>
+                          <Text style={[styles.repMaxHeader, styles.repMaxAchievementColumn]}>ACHIEVED</Text>
+                        </View>
+                        {progress.repMaxRecords.map((record) => (
+                          <View key={record.repCount} style={styles.repMaxRow}>
+                            <Text style={[styles.repMaxRepCount, styles.repMaxRepsColumn]}>
+                              {record.repCount}
+                            </Text>
+                            <Text
+                              style={[
+                                styles.repMaxWeight,
+                                styles.repMaxWeightColumn,
+                                record.weight === null && styles.repMaxMissing,
+                              ]}
+                            >
+                              {record.weight === null ? '—' : `${record.displayWeight} ${weightUnit}`}
+                            </Text>
+                            <View style={styles.repMaxAchievementColumn}>
+                              <Text style={record.achievedAt ? styles.repMaxDate : styles.repMaxMissing}>
+                                {record.achievedAt
+                                  ? formatExerciseHistoryDate(record.achievedAt)
+                                  : 'No record'}
+                              </Text>
+                              {record.workoutName ? (
+                                <Text numberOfLines={1} style={styles.repMaxWorkout}>
+                                  {record.workoutName}
+                                </Text>
+                              ) : null}
+                            </View>
+                          </View>
+                        ))}
+                      </View>
+                    </View>
+                  ) : null}
+
                   {progress && progress.totalSessions > 0 ? (
                     <View style={styles.performanceList}>
                       <Text style={styles.performanceSubheading}>Progress chart</Text>
@@ -1421,6 +1465,71 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     textTransform: 'uppercase',
     marginTop: spacing.xs,
+  },
+  repMaxDescription: {
+    color: colors.textMuted,
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  repMaxTable: {
+    overflow: 'hidden',
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: radius.md,
+    backgroundColor: colors.surfaceElevated,
+  },
+  repMaxRow: {
+    minHeight: 46,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 6,
+    borderBottomColor: colors.border,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  repMaxHeaderRow: {
+    minHeight: 34,
+    backgroundColor: colors.surface,
+  },
+  repMaxHeader: {
+    color: colors.textMuted,
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  repMaxRepsColumn: {
+    width: 42,
+  },
+  repMaxWeightColumn: {
+    width: 82,
+  },
+  repMaxAchievementColumn: {
+    flex: 1,
+    minWidth: 0,
+  },
+  repMaxRepCount: {
+    color: colors.text,
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  repMaxWeight: {
+    color: colors.primary,
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  repMaxDate: {
+    color: colors.text,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  repMaxWorkout: {
+    color: colors.textMuted,
+    fontSize: 10,
+    marginTop: 1,
+  },
+  repMaxMissing: {
+    color: colors.textMuted,
+    fontSize: 11,
   },
   performanceRow: {
     minHeight: 58,

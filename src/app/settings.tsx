@@ -6,6 +6,7 @@ import { useRouter } from 'expo-router';
 import { SectionCard } from '@/components/SectionCard';
 import { colors, spacing } from '@/constants/theme';
 import { useActiveWorkout } from '@/context/ActiveWorkoutContext';
+import { useServerConnection } from '@/context/ServerConnectionContext';
 import { pickTextFile, shareTextFile } from '@/lib/dataTransfer';
 import { buildLiftFlowBackup, buildWorkoutHistoryCsv, exportFileStamp } from '@/lib/exportData';
 import { requestRestTimerAlertPermission } from '@/lib/restTimerAlerts';
@@ -23,6 +24,13 @@ import { parseLiftFlowBackup } from '@/storage/liftflowStorage';
 
 export default function SettingsScreen() {
   const router = useRouter();
+  const {
+    session: serverSession,
+    connectionStatus,
+    lastConnectionError,
+    checkConnection,
+    signOut,
+  } = useServerConnection();
   const {
     persistenceStatus,
     lastSavedAt,
@@ -201,6 +209,21 @@ export default function SettingsScreen() {
     );
   });
 
+  const verifyServerConnection = () => runAction('Server connection', async () => {
+    await checkConnection();
+  });
+
+  const signOutFromServer = () => runAction('Server sign out', async () => {
+    const confirmed = await confirmAction(
+      'Sign out from this server?',
+      'Your local exercises, templates, and workout history will stay on this device. Only the saved server login will be removed.',
+      'Sign Out',
+      true,
+    );
+    if (!confirmed) return;
+    await signOut();
+  });
+
   const toggleRestNotifications = async (enabled: boolean) => {
     if (!enabled) {
       updateRestTimerSettings({ notificationsEnabled: false });
@@ -238,6 +261,31 @@ export default function SettingsScreen() {
           />
         ) : null}
       </SectionCard>
+
+      {serverSession ? (
+        <SectionCard title="Self-hosted server">
+          <SettingsRow
+            label={serverSession.serverInfo.name}
+            detail={serverSession.serverUrl}
+          />
+          <SettingsRow
+            label={formatConnectionStatus(connectionStatus)}
+            detail={lastConnectionError ?? `Signed in as ${serverSession.owner.displayName} (@${serverSession.owner.username})`}
+          />
+          <SettingsRow
+            label={busyAction === 'Server connection' ? 'Checking server…' : 'Check server connection'}
+            detail="Verify the server identity and refresh this device session"
+            onPress={verifyServerConnection}
+            disabled={Boolean(busyAction)}
+          />
+          <SettingsRow
+            label={busyAction === 'Server sign out' ? 'Signing out…' : 'Sign out from this server'}
+            detail="Keeps all current workout data stored locally"
+            onPress={signOutFromServer}
+            disabled={Boolean(busyAction)}
+          />
+        </SectionCard>
+      ) : null}
 
       <SectionCard title="Local data">
         <SettingsRow label={formatPersistenceStatus(persistenceStatus)} detail={lastSavedAt ? `Last saved ${formatSavedTime(lastSavedAt)}` : 'Preparing local storage'} />
@@ -457,6 +505,13 @@ function formatPersistenceStatus(status: 'loading' | 'saving' | 'saved' | 'error
   if (status === 'error') return 'Local storage needs attention';
   if (status === 'loading') return 'Loading local data…';
   return 'Local data is saved';
+}
+
+function formatConnectionStatus(status: 'loading' | 'connected' | 'checking' | 'offline' | 'disconnected') {
+  if (status === 'connected') return 'Server connected';
+  if (status === 'checking' || status === 'loading') return 'Checking server connection…';
+  if (status === 'offline') return 'Working offline';
+  return 'Server sign-in required';
 }
 
 function formatRestTime(totalSeconds: number) {

@@ -4,7 +4,11 @@ import type {
   WorkoutExercise,
   WorkoutSet,
 } from '@/context/ActiveWorkoutContext';
-import { estimateOneRepMax, getWorkoutDateTimestamp } from '@/lib/workoutStats';
+import {
+  estimateOneRepMax,
+  getWorkoutDateTimestamp,
+  MAX_E1RM_REPS,
+} from '@/lib/workoutStats';
 import { formatSeconds, formatSetMetrics } from '@/lib/exerciseTracking';
 
 export type ExerciseRecordKey =
@@ -26,6 +30,15 @@ export type ExerciseRecord = {
   workoutId: string;
   workoutName: string;
   higherIsBetter: boolean;
+};
+
+export type ExerciseRepMaxRecord = {
+  repCount: number;
+  weight: number | null;
+  displayWeight: string;
+  achievedAt?: number;
+  workoutId?: string;
+  workoutName?: string;
 };
 
 export type ExercisePrAchievement = {
@@ -55,6 +68,7 @@ export type ExerciseProgressSummary = {
   totalSessions: number;
   totalCompletedSets: number;
   records: ExerciseRecord[];
+  repMaxRecords: ExerciseRepMaxRecord[];
   recentHistory: ExerciseHistoryEntry[];
   recentPrs: ExercisePrAchievement[];
 };
@@ -77,6 +91,7 @@ type MetricCandidate = {
 };
 
 const normalizeName = (value: string) => value.trim().toLowerCase();
+const REP_MAX_COUNTS = Array.from({ length: MAX_E1RM_REPS }, (_, index) => index + 1);
 
 export function exerciseMatchesDefinition(
   definition: ExerciseDefinition,
@@ -140,6 +155,7 @@ export function buildExerciseProgress(
 
   const observations = collectObservations(definition, completedWorkouts);
   const records = buildRecords(definition.exerciseType, observations);
+  const repMaxRecords = buildRepMaxRecords(definition.exerciseType, observations);
   const recentPrs = buildExercisePrTimeline(definition, completedWorkouts);
 
   return {
@@ -149,6 +165,7 @@ export function buildExerciseProgress(
     totalSessions: sessions.length,
     totalCompletedSets: sessions.reduce((total, session) => total + session.completedSetCount, 0),
     records,
+    repMaxRecords,
     recentHistory: sessions,
     recentPrs,
   };
@@ -246,6 +263,63 @@ function buildRecords(
   return getMetricOrder(exerciseType)
     .map((key) => records.get(key))
     .filter((record): record is ExerciseRecord => Boolean(record));
+}
+
+function buildRepMaxRecords(
+  exerciseType: ExerciseType,
+  observations: SetObservation[],
+): ExerciseRepMaxRecord[] {
+  if (exerciseType !== 'Weight & Reps' && exerciseType !== 'Bodyweight + Added Weight') {
+    return [];
+  }
+
+  const bestByRepCount = new Map<number, ExerciseRepMaxRecord>();
+
+  observations.forEach((observation) => {
+    const weight = validMetric(observation.set.weight);
+    const reps = validMetric(observation.set.reps);
+
+    if (
+      weight === undefined ||
+      weight <= 0 ||
+      reps === undefined ||
+      !Number.isInteger(reps) ||
+      reps < 1
+    ) {
+      return;
+    }
+
+    const highestSupportedRepCount = Math.min(reps, MAX_E1RM_REPS);
+
+    for (let repCount = 1; repCount <= highestSupportedRepCount; repCount += 1) {
+      const existing = bestByRepCount.get(repCount);
+      if (
+        existing?.weight !== null &&
+        existing?.weight !== undefined &&
+        weight <= existing.weight
+      ) {
+        continue;
+      }
+
+      bestByRepCount.set(repCount, {
+        repCount,
+        weight,
+        displayWeight: formatNumber(weight),
+        achievedAt: observation.completedAt,
+        workoutId: observation.workoutId,
+        workoutName: observation.workoutName,
+      });
+    }
+  });
+
+  return REP_MAX_COUNTS.map(
+    (repCount) =>
+      bestByRepCount.get(repCount) ?? {
+        repCount,
+        weight: null,
+        displayWeight: '—',
+      },
+  );
 }
 
 export function buildExercisePrTimeline(
