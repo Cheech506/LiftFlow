@@ -1,3 +1,9 @@
+import {
+  projectionIdentity,
+  type NormalizedProjection,
+} from '@/storage/normalizedState';
+import { STORAGE_VERSION } from '@/storage/liftflowStorageCore';
+
 export const LIFTFLOW_API_VERSION = 'v1';
 export const LIFTFLOW_CLIENT_VERSION = '0.7.0';
 
@@ -47,10 +53,44 @@ export type ServerDiscovery = {
 };
 
 type RequestOptions = {
-  method?: 'GET' | 'POST';
+  method?: 'GET' | 'POST' | 'PUT';
   body?: unknown;
   accessToken?: string;
   timeoutMs?: number;
+};
+
+export type ServerSnapshotCounts = {
+  preferences: number;
+  exercises: number;
+  folders: number;
+  templates: number;
+  sessions: number;
+  workoutExercises: number;
+  workoutSets: number;
+};
+
+export type ServerDataSummary = {
+  initialized: boolean;
+  revision: number;
+  storageVersion: number | null;
+  projectionHash: string | null;
+  updatedAt: string | null;
+  rowCount: number;
+  counts: ServerSnapshotCounts;
+};
+
+export type ServerSnapshotWriteResult = {
+  ownerId: string;
+  revision: number;
+  storageVersion: number;
+  projectionHash: string;
+  updatedAt: string;
+  rowCount: number;
+  counts: ServerSnapshotCounts;
+};
+
+export type ServerSnapshot = ServerSnapshotWriteResult & {
+  tables: NormalizedProjection;
 };
 
 export class ServerApiError extends Error {
@@ -164,6 +204,33 @@ export function logoutOwner(serverUrl: string, accessToken: string) {
   return requestJson<{ signedOut: true }>(serverUrl, '/api/v1/auth/logout', {
     method: 'POST',
     accessToken,
+  });
+}
+
+export function getServerDataSummary(serverUrl: string, accessToken: string) {
+  return requestJson<ServerDataSummary>(serverUrl, '/api/v1/data/summary', { accessToken });
+}
+
+export function getServerSnapshot(serverUrl: string, accessToken: string) {
+  return requestJson<ServerSnapshot>(serverUrl, '/api/v1/data/snapshot', { accessToken });
+}
+
+export function replaceServerSnapshot(
+  serverUrl: string,
+  accessToken: string,
+  projection: NormalizedProjection,
+  baseRevision?: number,
+) {
+  return requestJson<ServerSnapshotWriteResult>(serverUrl, '/api/v1/data/snapshot', {
+    method: 'PUT',
+    accessToken,
+    body: {
+      storageVersion: STORAGE_VERSION,
+      projectionHash: projectionIdentity(projection),
+      ...(baseRevision === undefined ? {} : { baseRevision }),
+      tables: projection,
+    },
+    timeoutMs: 30_000,
   });
 }
 

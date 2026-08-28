@@ -24,7 +24,7 @@ async def server_info(
         environment=settings.environment,
         capabilities=ServerCapabilities(
             authentication=True,
-            backup_import=False,
+            backup_import=True,
             sync=False,
             web_app=False,
         ),

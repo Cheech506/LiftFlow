@@ -16,8 +16,10 @@ printf '\nChecking stable server identity\n'
 curl --fail --silent --show-error "$server_url/api/v1/server-info"
 printf '\nChecking single-owner authentication status\n'
 curl --fail --silent --show-error "$server_url/api/v1/auth/status"
+printf '\nChecking protected workout-data API contract\n'
+curl --fail --silent --show-error "$server_url/openapi.json" | grep -q '"/api/v1/data/snapshot"'
 printf '\nChecking the active Alembic revision\n'
-docker compose exec -T api alembic current | grep '0002_single_owner_auth (head)'
+docker compose exec -T api alembic current | grep '0003_workout_data (head)'
 printf 'Running backend tests in the pinned container\n'
 docker compose --profile test run --rm --build api-test
-printf 'LF-035 server verification passed.\n'
+printf 'LF-036 server verification passed.\n'

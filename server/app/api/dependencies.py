@@ -14,6 +14,7 @@ from app.core.config import Settings, get_settings
 from app.models.owner_account import OwnerAccount
 from app.models.server_instance import ServerInstance
 from app.schemas.api import ServerIdentity
+from app.services.workout_data import WorkoutDataService
 
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -30,6 +31,13 @@ def get_auth_service(
     settings: Settings = Depends(get_settings),
 ) -> AuthService:
     return AuthService(session, settings)
+
+
+def get_workout_data_service(
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> WorkoutDataService:
+    return WorkoutDataService(session, settings)
 
 
 async def require_authenticated_owner(

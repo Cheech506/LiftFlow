@@ -19,7 +19,7 @@ class Settings(BaseSettings):
 
     app_name: str = "LiftFlow Server"
     environment: Literal["development", "test", "production"] = "development"
-    server_version: str = "0.2.0"
+    server_version: str = "0.3.0"
     api_version: str = "v1"
     api_prefix: str = "/api/v1"
     minimum_client_version: str = "0.7.0"

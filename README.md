@@ -34,8 +34,10 @@ LiftFlow is a local-first workout tracker for iPhone, Android, and the web. It i
 - A Docker Compose server foundation with FastAPI, PostgreSQL, Alembic migrations, stable server identity, and versioned health/server-information endpoints.
 - An Immich-style server connection screen with exactly one owner account per Docker installation.
 - Argon2id password hashing, hashed rotating device tokens, protected owner endpoints, and encrypted native credential storage.
+- Owner-scoped PostgreSQL workout tables for preferences, exercise definitions, folders, templates, sessions, workout exercises, and sets.
+- Protected snapshot summary/read/replace endpoints with storage-version checks, relationship validation, transaction boundaries, and revision conflicts.
 
-All workout data remains local and usable offline. On iPhone and Android, LiftFlow uses normalized SQLite tables. LF-035 authenticates the installed app without uploading or changing workout data; guarded migration, synchronization, and the server-backed web application remain later isolated batches.
+All workout data remains local and usable offline. On iPhone and Android, LiftFlow uses normalized SQLite tables. LF-036 creates the protected PostgreSQL destination and data contract but does not automatically upload or replace local data. The guarded initial migration, continuous synchronization, and Docker-hosted web application remain later isolated batches.
 
 ## Install dependencies
 
@@ -48,7 +50,7 @@ npm ci
 
 The committed lockfile pins the Expo SDK 54-compatible development client and its native support packages. Run the quality checks before generating native projects.
 
-## LF-035 single-owner self-hosted server
+## LF-036 self-hosted data server
 
 Requirements: Docker Desktop, OrbStack, or another Docker Compose-compatible runtime.
 
@@ -61,7 +63,7 @@ curl http://localhost:8080/api/v1/server-info
 curl http://localhost:8080/api/v1/auth/status
 ```
 
-Open `http://localhost:8080/docs` for the generated API documentation. The first start creates the PostgreSQL volume, applies Alembic migrations, creates one stable server identity, and waits for the owner to finish setup from LiftFlow. The database enforces exactly one owner account.
+Open `http://localhost:8080/docs` for the generated API documentation. The first start creates the PostgreSQL volume, applies Alembic migrations, creates one stable server identity, and waits for the owner to finish setup from LiftFlow. The database enforces exactly one owner account. Existing LF-035 installations upgrade in place to Alembic revision `0003_workout_data` without replacing the server UUID, owner, sessions, or PostgreSQL volume.
 
 The API remains bound to `127.0.0.1` by default. That works with the iOS simulator on the same Mac. For a physical phone on a trusted LAN, set `LIFTFLOW_API_HOST=0.0.0.0`, restart Compose, and connect using the Docker computer's LAN address. HTTP is for trusted development networks only; production exposure waits for LF-040 HTTPS.
 
@@ -73,6 +75,16 @@ LF-035 authentication provides:
 - `POST /api/v1/auth/refresh` — rotating access and refresh tokens.
 - `GET /api/v1/auth/me` — authenticated owner identity.
 - `POST /api/v1/auth/logout` — revoke the current device session.
+
+LF-036 adds authenticated workout-data contracts:
+
+- `GET /api/v1/data/summary` — initialization state, revision, storage version, projection hash, and entity counts.
+- `GET /api/v1/data/snapshot` — complete owner snapshot with stable normalized relationships.
+- `PUT /api/v1/data/snapshot` — validated all-or-nothing snapshot replacement with optional revision protection.
+
+The snapshot is stored in relational PostgreSQL tables. Foreign keys connect folders to templates, templates to source workouts, templates/sessions to workout exercises, and workout exercises to sets. Stable app IDs and sync UUIDs are stored separately, while the exact normalized JSON payload is retained for lossless client round trips. The API rejects orphaned sets/exercises, multiple active workouts, unsupported storage versions, duplicate identities, and stale base revisions.
+
+The app does not call snapshot replacement automatically in LF-036. LF-037 will add a preview, safety backup, upload, count comparison, and restore test before PostgreSQL becomes authoritative.
 
 Passwords are stored only as Argon2id hashes. Usable access and refresh tokens are returned once to the app; PostgreSQL stores only SHA-256 token digests. Native credentials use Expo SecureStore, backed by the iOS Keychain or Android Keystore.
 
@@ -111,7 +123,7 @@ open ios/LiftFlow.xcworkspace
 
 In Xcode, select the LiftFlow target, open **Signing & Capabilities**, enable automatic signing, and choose your Apple development team. Connect and trust the iPhone, choose it as the run destination, and press Run. A free Personal Team works for local testing but expires after seven days; a paid Apple Developer team removes that Personal Team limitation and supports EAS/internal distribution.
 
-After LiftFlow installs, enter `http://127.0.0.1:8080` in the simulator, create or sign in to the one server owner, and verify the local exercise, template, workout, History, and Progress totals are unchanged.
+After LiftFlow installs, enter `http://127.0.0.1:8080` in the simulator, create or sign in to the one server owner, and verify the local exercise, template, workout, History, and Progress totals are unchanged. LF-036 is server/API-only and does not require another native rebuild after LF-035.
 
 LF-035 adds the native `expo-secure-store` module. Rebuild the development client once after applying this batch:
 
@@ -167,7 +179,7 @@ npx expo-doctor
 npx expo export --platform web
 ```
 
-The automated suite additionally covers the single-owner database constraint, password/token hashing, protected routes, server-address normalization, compatibility checks, and encrypted native session configuration. See [docs/LF035-SINGLE-OWNER-CHECKLIST.md](docs/LF035-SINGLE-OWNER-CHECKLIST.md) for the complete Docker and simulator acceptance test.
+The automated suite additionally covers the single-owner database constraint, password/token hashing, protected routes, server-address normalization, compatibility checks, encrypted native session configuration, relational workout migration, snapshot relationships, exact normalized round trips, revision conflicts, and storage-version enforcement. See [docs/LF036-WORKOUT-DATA-CHECKLIST.md](docs/LF036-WORKOUT-DATA-CHECKLIST.md) for the complete Docker and API acceptance test.
 
 ## Project structure
 
